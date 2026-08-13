@@ -221,7 +221,10 @@ function serverEnv(port, supervised) {
   // the same choice so the scripts/start.mjs fallback entry agrees.
   const isAddress = (h) =>
     h === "localhost" || /^[\d.]+$/.test(h) || (h.includes(":") && /^\[?[0-9a-fA-F:]+\]?$/.test(h));
-  const bind = [process.env.HOST, process.env.HOSTNAME].find((h) => h && isAddress(h)) || "localhost";
+  // The health probe uses IPv4 explicitly. Default to the same address so a
+  // platform that resolves localhost to ::1 cannot start successfully on one
+  // loopback family while every status check probes the other.
+  const bind = [process.env.HOST, process.env.HOSTNAME].find((h) => h && isAddress(h)) || "127.0.0.1";
   return {
     ...process.env,
     NODE_ENV: "production",

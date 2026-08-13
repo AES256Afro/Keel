@@ -41,7 +41,10 @@ jobs:
           DIR=$(mktemp -d)
           tar -xzf "$TARBALL" -C "$DIR"
           APP=$(ls -d "$DIR"/keel-*)
-          KEEL_HOME="$DIR/home" PORT=3999 node "$APP/bin/keel.mjs" start
+          if ! KEEL_HOME="$DIR/home" PORT=3999 node "$APP/bin/keel.mjs" start; then
+            cat "$DIR/home/keel.log" || true
+            exit 1
+          fi
           curl -fsS http://127.0.0.1:3999/api/health | grep -q '"ok":true'
           KEEL_HOME="$DIR/home" node "$APP/bin/keel.mjs" stop
       - name: Attach to the release

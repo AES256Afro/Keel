@@ -107,7 +107,7 @@ Operational documentation:
 
 ## License
 
-Keel 1.2.0 is source-available under the [Business Source License 1.1](LICENSE).
+Keel 1.2.1 is source-available under the [Business Source License 1.1](LICENSE).
 Personal self-hosting and internal organizational use are allowed. Offering a
 third-party hosted or managed Keel service requires a commercial license. This
 version changes to Apache 2.0 on August 13, 2030. See [LICENSING.md](LICENSING.md)
