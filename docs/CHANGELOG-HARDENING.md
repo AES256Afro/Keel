@@ -1,5 +1,13 @@
 # What shipped
 
+## 1.2.4 patch
+
+- Re-running a guided installer now stops only the verified managed Keel
+  service tied to that install before changing dependencies or migrating
+  SQLite. It restarts the service after success and restores it after a failed
+  update, preventing `database is locked` upgrades without killing unrelated
+  or manually started processes.
+
 ## 1.2.3 patch
 
 - Password registration no longer consumes a workspace invitation without
@@ -12,7 +20,7 @@
   an operator cannot accidentally stage a notes database or service log.
 
 Everything below first shipped in the 1.2.2 hardening release and remains part
-of 1.2.3. It is verified by the repository's automated suites plus rendered
+of the current 1.2.x line. It is verified by the repository's automated suites plus rendered
 browser testing and grouped by what it changes for you.
 
 ---
