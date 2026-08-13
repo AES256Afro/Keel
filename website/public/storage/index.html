@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Your Keel data | Storage, encryption, backups, and GitHub</title>
+  <meta name="description" content="Understand where Keel stores notes, what is encrypted, how backups work, and why GitHub is better as an optional export target than a live note database.">
+  <meta name="theme-color" content="#101a2c"><link rel="canonical" href="https://keelnotes.com/storage/">
+  <link rel="icon" href="/assets/keel-mark.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/styles.css">
+  <meta property="og:title" content="Your Keel data"><meta property="og:description" content="A clear account of storage, encryption, backups, and the GitHub question."><meta property="og:image" content="https://keelnotes.com/og.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header"><nav class="nav shell" aria-label="Main navigation"><a class="brand" href="/"><img src="/assets/keel-mark.svg" alt="" width="34" height="34"><span>Keel Notes</span></a><button class="nav-toggle" type="button" aria-label="Open navigation" aria-expanded="false" data-nav-toggle>Menu</button><div class="nav-links" data-nav-menu><a href="/#why">Why Keel</a><a href="/install/">Install</a><a href="/storage/" aria-current="page">Your data</a><a href="/security/">Security</a><a class="button button-small" href="https://github.com/AES256Afro/Keel/releases/latest">Get Keel 1.2</a></div></nav></header>
+  <main id="main">
+    <section class="page-hero"><div class="shell"><p class="eyebrow">Storage without hand-waving</p><h1>Know what lives where.</h1><p class="lede">Keel makes the storage model inspectable. The live workspace, exported backups, optional cloud copies, and sign-in providers do different jobs. This page keeps those promises separate.</p></div></section>
+    <section class="section section-tight"><div class="shell">
+      <div class="security-grid">
+        <article class="security-card"><span class="truth">Live workspace</span><h3>SQLite or PostgreSQL</h3><p>SQLite is the default and keeps the workspace in one database file. PostgreSQL is available for managed hosts without persistent local disk.</p></article>
+        <article class="security-card"><span class="truth">Application encryption</span><h3>Backups, not the live database</h3><p>Snapshot backups can be encrypted with a passphrase. The live database is not end-to-end or application-encrypted. Use full-disk or volume encryption for storage-at-rest protection.</p></article>
+        <article class="security-card"><span class="truth">Optional copies</span><h3>Your folder or storage provider</h3><p>Backups can stay local or be copied to Google Drive, OneDrive, Azure Blob, or Cloudflare R2 after you configure that provider.</p></article>
+        <article class="security-card"><span class="truth">Moving</span><h3>Export, restore, verify</h3><p>Use Keel's export or backup path rather than copying a database while it is being written. Restore a test copy before removing the old install.</p></article>
+      </div>
+    </div></section>
+
+    <section class="section ownership"><div class="ownership-grid shell"><div class="ownership-copy"><p class="eyebrow">The GitHub idea</p><h2>Possible? Yes. Best as primary storage? No.</h2><p>A GitHub App could sign users in and write an encrypted vault file to a repository. That is technically real, but every sync becomes repository content activity. It brings permissions, rate limits, conflicts, repository history, and metadata leakage into a workflow that wants database semantics.</p></div><div class="principle-list"><div class="principle"><span>01</span><div><h3>Identity and storage are separate</h3><p>GitHub sign-in can identify a user without granting repository access. Storage permissions should be requested only if the user opts into that feature.</p></div></div><div class="principle"><span>02</span><div><h3>Encryption does not hide all metadata</h3><p>Ciphertext can hide note content, but repository existence, update timing, file size, commits, and access relationships remain visible to GitHub.</p></div></div><div class="principle"><span>03</span><div><h3>Git is not a sync database</h3><p>Concurrent devices can race or conflict, attachments grow history, and rekeying or deletion has to account for old commits.</p></div></div></div></div></section>
+
+    <section class="section"><div class="narrow prose">
+      <section><p class="eyebrow">Recommendation</p><h2>Keep keelnotes.com public and useful. Keep notes self-hosted.</h2><p>The current site should remain a product, release, and deployment guide. It should not accept notes or require a user account. That gives Keel a trustworthy front door without creating a second, multi-tenant security product.</p>
+      <div class="decision"><article class="decision-card recommended"><h3>Now: release and guidance site</h3><p>Static Cloudflare site, public source, downloads, install decision support, storage truth, security policy, and no account database.</p></article><article class="decision-card"><h3>Later: optional hosted Keel</h3><p>GitHub sign-in for identity, browser-side encryption, ciphertext in dedicated object storage, explicit recovery design, and a security review before beta.</p></article></div></section>
+      <section><h2>If GitHub storage is added later</h2><ol class="step-list"><li>Use a GitHub App, not a broad classic OAuth app. Ask for access only to a user-selected repository.</li><li>Encrypt in the client before upload. Never send the vault key or plaintext notes to the Keel service.</li><li>Store one versioned vault manifest plus chunked encrypted objects. Do not make one commit per keystroke.</li><li>Define passphrase derivation, recovery, device enrollment, key rotation, conflict handling, and deletion before collecting any user data.</li><li>Position GitHub as an optional backup or export target first. Dedicated object storage remains a better fit for a hosted sync service.</li></ol>
+      <div class="callout"><strong>Best first experiment:</strong> add “export encrypted snapshot to a selected GitHub repository” as an opt-in backup provider. That tests demand without pretending GitHub is a real-time note database.</div></section>
+      <section><h2>Backup checklist</h2><ul><li>Set a strong backup passphrase and keep it in a password manager.</li><li>Keep at least one copy off the machine that runs Keel.</li><li>Confirm the backup timestamp and size change after meaningful edits.</li><li>Test a restore into a separate temporary install.</li><li>Document the data location and recovery steps for your future self.</li></ul></section>
+    </div></section>
+  </main>
+  <footer class="site-footer"><div class="footer-grid shell"><div><a class="brand" href="/"><img src="/assets/keel-mark.svg" alt="" width="34" height="34"><span>Keel Notes</span></a><p class="footer-copy">Your live workspace, backups, and optional providers are separate choices.</p></div><div class="footer-links"><a href="/install/">Install</a><a href="/storage/">Your data</a><a href="/security/">Security</a><a href="https://github.com/AES256Afro/Keel">Source</a><a href="https://github.com/AES256Afro/Keel/releases">Releases</a><a href="https://github.com/AES256Afro/Keel/blob/main/LICENSING.md">Licensing</a></div><div class="footer-legal"><span>Copyright 2026 Christopher Courtney</span><span>Source available under Business Source License 1.1</span></div></div></footer>
+  <script src="/assets/site.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "keelnotes-site",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-13",
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "keelnotes.com", "custom_domain": true },
+    { "pattern": "www.keelnotes.com", "custom_domain": true },
+  ],
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page",
+  },
+  "observability": { "enabled": true },
+}

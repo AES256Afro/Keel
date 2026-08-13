@@ -1,0 +1,251 @@
+# Continuous integration.
+#
+# Every push and pull request gets typechecked, linted, built, audited, and run
+# through the security test suites. The authorization matrix in particular is
+# the net that would have caught the instance-owner/workspace-owner confusion -
+# it needs to run on every change, not on request.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Scratch database; each test script provisions its own on top of this.
+      DATABASE_URL: "file:./ci.db"
+      NEXT_TELEMETRY_DISABLED: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npx next build
+
+      # Runs against the production build the previous step produced.
+      - name: Authorization matrix
+        run: npm run test:authz
+
+      - name: Backup round-trip
+        run: npm run test:backup
+
+      - name: Auth hardening (headers, rate limits, size caps)
+        run: npm run test:auth
+
+  # Keel ships two database dialects. SQLite is covered by the job above (every
+  # test script uses it); this proves the PostgreSQL path - the one Azure and
+  # every managed host use - actually migrates and serves.
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: keel
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/keel
+      NEXT_TELEMETRY_DISABLED: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+
+      # The generated PostgreSQL schema must match the source schema exactly -
+      # a hand-edit or a forgotten regeneration fails here, not in production.
+      - name: PostgreSQL schema is in sync
+        run: npm run db:check-postgres
+
+      - name: Apply PostgreSQL migrations
+        run: npm run db:deploy
+
+      - name: Build against PostgreSQL
+        run: npm run build
+
+      - name: Authorization matrix on PostgreSQL
+        run: npm run test:authz
+
+      - name: Backup round-trip on PostgreSQL
+        run: npm run test:backup
+
+  # The installers and the container image are the paths most likely to rot
+  # unnoticed, because nobody exercises them while developing.
+  packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Shell scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning install.sh deploy/cloud-init.sh
+          sh -n docker/entrypoint.sh
+
+      - name: PowerShell installer
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { $_.Message }; exit 1 }
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $r = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Error
+          if ($r) { $r | Format-Table; exit 1 }
+
+      # Both build args, because the Prisma client is generated per dialect and
+      # a broken Postgres image would only surface on a managed host.
+      - name: Build the SQLite image
+        run: docker build -t keel:sqlite .
+
+      - name: Build the PostgreSQL image
+        run: docker build -t keel:postgres --build-arg DB_PROVIDER=postgresql .
+
+      - name: Build the hardened production image and verify backup support
+        run: |
+          set -e
+          trap 'docker rm -f keel-production-smoke >/dev/null 2>&1 || true; docker volume rm keel-production-smoke-data >/dev/null 2>&1 || true' EXIT
+          docker build -f Dockerfile.prod -t keel:production .
+          docker run --rm --entrypoint sqlite3 keel:production --version
+          docker volume create keel-production-smoke-data >/dev/null
+          docker run --rm -v keel-production-smoke-data:/data alpine:3.22 chown 1000:1000 /data
+          docker run -d --name keel-production-smoke -p 3001:3000 \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=67108864 \
+            --cap-drop ALL --security-opt no-new-privileges \
+            -v keel-production-smoke-data:/data \
+            -e KEEL_OWNER_EMAIL=ci@example.test keel:production
+          test "$(docker inspect keel-production-smoke --format '{{.Config.User}}')" = node
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3001/api/health | grep -q '"ok":true'; then
+              echo "Production image healthy under hardened restrictions"
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3001/api/health | grep -q '"ok":true'
+          docker exec keel-production-smoke sqlite3 /data/keel.db \
+            ".backup '/data/production-smoke.db'"
+          test "$(docker exec keel-production-smoke sqlite3 /data/production-smoke.db \
+            'PRAGMA integrity_check;')" = ok
+
+      - name: The image actually serves
+        run: |
+          docker run -d --name keel-smoke -p 3000:3000 \
+            -e KEEL_OWNER_EMAIL=ci@example.test keel:sqlite
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/api/health | grep -q '"ok":true'; then
+              echo "healthy"; break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/api/health | grep -q '"ok":true'
+          # Security headers must survive containerisation.
+          curl -sD - -o /dev/null http://localhost:3000/login | grep -qi 'content-security-policy'
+          docker logs keel-smoke | tail -20
+          docker rm -f keel-smoke
+
+      - name: The image refuses a mismatched database
+        run: |
+          # A SQLite image pointed at Postgres must fail loudly at startup, not
+          # at the first query.
+          if docker run --rm -e DATABASE_URL=postgresql://x/y keel:sqlite 2>&1 | grep -q "rebuild with"; then
+            echo "correctly refused"
+          else
+            echo "expected a build-arg mismatch error"; exit 1
+          fi
+
+      # A fresh Debian box, exactly like a new VPS.
+      - name: Installer runs on a clean machine
+        run: |
+          docker run --rm -v "$PWD:/src:ro" debian:bookworm-slim bash -c '
+            set -e
+            apt-get update -qq && apt-get install -y -qq git curl ca-certificates >/dev/null
+            curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
+            apt-get install -y -qq nodejs >/dev/null
+            git config --global --add safe.directory /src
+            git config --global --add safe.directory /src/.git
+            git clone -q --no-hardlinks /src /build
+            git -C /build checkout -q -B main HEAD
+            cd /build
+            KEEL_REPO=/build bash /build/install.sh \
+              --dir /opt/keel --port 3000 --owner ci@example.test --yes
+            test -f /opt/keel/.env
+            grep -q "KEEL_OWNER_EMAIL=\"ci@example.test\"" /opt/keel/.env
+            test -f /opt/keel/data/keel.db
+            echo "installer OK"
+          '
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      # Fails the job on any high-severity advisory in a runtime dependency.
+      # Dev-only advisories are reported but don't block.
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit everything (advisory)
+        run: npm audit --audit-level=critical || true
+
+  public-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check:public
+      - run: npm run site:check

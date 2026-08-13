@@ -1,0 +1,20 @@
+# Caddy reverse proxy for Keel - automatic HTTPS + gzip.
+#
+# KEEL_DOMAINS (in .env.prod) is a space-separated list of every hostname this
+# server answers, for example:
+#   KEEL_DOMAINS="notes.example.com"
+# The app itself decides which host shows the site vs the notebook, via
+# KEEL_SITE_HOSTS (see src/proxy.ts). Caddy obtains/renews Let's Encrypt certs
+# for all of them automatically.
+#
+# Cloudflare note: for certificates to issue over HTTP, either set the DNS
+# records to "DNS only" (grey cloud), OR keep them proxied (orange cloud) and
+# use a Cloudflare Origin Certificate with SSL mode "Full (strict)" - see
+# docs/HOSTING.md.
+{$KEEL_DOMAINS} {
+	encode gzip
+	reverse_proxy keel:3000 {
+		health_uri /api/health
+		health_interval 15s
+	}
+}

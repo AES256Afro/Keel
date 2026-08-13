@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install Keel | Desktop, home server, Docker, or VPS</title>
+  <meta name="description" content="A guided Keel install guide for Windows, macOS, Linux, Docker, home servers, and VPS hosting, with updates and troubleshooting.">
+  <meta name="theme-color" content="#101a2c">
+  <link rel="canonical" href="https://keelnotes.com/install/">
+  <link rel="icon" href="/assets/keel-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <meta property="og:title" content="Install Keel">
+  <meta property="og:description" content="Choose the Keel setup that matches your machine and how you want to reach your notes.">
+  <meta property="og:image" content="https://keelnotes.com/og.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <nav class="nav shell" aria-label="Main navigation">
+      <a class="brand" href="/"><img src="/assets/keel-mark.svg" alt="" width="34" height="34"><span>Keel Notes</span></a>
+      <button class="nav-toggle" type="button" aria-label="Open navigation" aria-expanded="false" data-nav-toggle>Menu</button>
+      <div class="nav-links" data-nav-menu>
+        <a href="/#why">Why Keel</a><a href="/install/" aria-current="page">Install</a><a href="/storage/">Your data</a><a href="/security/">Security</a>
+        <a class="button button-small" href="https://github.com/AES256Afro/Keel/releases/latest">Get Keel 1.2</a>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="page-hero">
+      <div class="shell">
+        <p class="eyebrow">Guided install</p>
+        <h1>Choose how Keel should live.</h1>
+        <p class="lede">Use it on one computer, keep it running at home, or put it on a server. These routes use the same application and can move the same workspace between them.</p>
+        <div class="status-row"><span class="status-pill">Current release: 1.2.0</span><span class="status-pill">Node.js 20+ for server installs</span><span class="status-pill">SQLite by default</span></div>
+      </div>
+    </section>
+
+    <section class="section section-tight">
+      <div class="shell">
+        <div class="install-chooser" role="tablist" aria-label="Choose an installation target" data-install-chooser>
+          <button type="button" role="tab" aria-selected="true" data-install-target="windows">Windows</button>
+          <button type="button" role="tab" aria-selected="false" tabindex="-1" data-install-target="mac">macOS</button>
+          <button type="button" role="tab" aria-selected="false" tabindex="-1" data-install-target="linux">Linux</button>
+          <button type="button" role="tab" aria-selected="false" tabindex="-1" data-install-target="docker">Docker</button>
+          <button type="button" role="tab" aria-selected="false" tabindex="-1" data-install-target="server">Server</button>
+        </div>
+
+        <div class="install-panel" data-install-panel="windows">
+          <div class="install-panel-grid">
+            <div><p class="eyebrow">Recommended for Windows</p><h2>Use the desktop installer.</h2><p>Download the setup file, run it, and open Keel. Windows SmartScreen may show an unrecognized-publisher warning because this release is not code-signed yet. Confirm the file came from the official GitHub release before continuing.</p><div class="hero-actions"><a class="button" href="https://github.com/AES256Afro/Keel/releases/latest/download/Keel.Setup.1.2.0.exe">Download Windows setup</a><a class="button button-secondary" href="#windows">See every step</a></div></div>
+            <div class="install-meta"><div><strong>Data location</strong><span>Your Windows user profile under Keel's application data folder.</span></div><div><strong>Expected result</strong><span>A Keel window opens and the local server remains available for scheduled backups.</span></div><div><strong>Alternative</strong><span>Use the PowerShell installer below to run Keel as an always-on service.</span></div></div>
+          </div>
+        </div>
+
+        <div class="install-panel" data-install-panel="mac" hidden>
+          <div class="install-panel-grid">
+            <div><p class="eyebrow">macOS Apple silicon</p><h2>Install the server and CLI.</h2><p>The guided shell installer checks Node.js, downloads Keel, generates local settings, builds the app, and can register a launchd service.</p><div class="code-wrap"><pre id="mac-command"><code>curl -fsSL https://raw.githubusercontent.com/AES256Afro/Keel/main/install.sh | bash -s -- --service</code></pre><button class="copy-button" type="button" data-copy="#mac-command">Copy</button></div><p>Then open <a href="http://localhost:3000">http://localhost:3000</a>.</p></div>
+            <div class="install-meta"><div><strong>Requirement</strong><span>macOS on Apple silicon. The script can guide you through Node.js if it is missing.</span></div><div><strong>Data location</strong><span>The installer prints the exact folder. CLI installs use <code>~/.keel</code>.</span></div><div><strong>Desktop status</strong><span>A signed macOS desktop package is not published yet.</span></div></div>
+          </div>
+        </div>
+
+        <div class="install-panel" data-install-panel="linux" hidden>
+          <div class="install-panel-grid">
+            <div><p class="eyebrow">Linux desktop</p><h2>Pick AppImage, Debian package, or service.</h2><p>The AppImage is portable. The Debian package integrates with Debian and Ubuntu. The shell route is best for a server that should start automatically.</p><div class="hero-actions"><a class="button" href="https://github.com/AES256Afro/Keel/releases/latest/download/Keel-1.2.0.AppImage">Download AppImage</a><a class="button button-secondary" href="https://github.com/AES256Afro/Keel/releases/latest/download/keel_1.2.0_amd64.deb">Download .deb</a></div></div>
+            <div class="install-meta"><div><strong>Desktop architectures</strong><span>The published AppImage and Debian package target x86-64.</span></div><div><strong>Server architectures</strong><span>Build from source on other Node.js 20 compatible Linux systems.</span></div><div><strong>Expected result</strong><span>The app opens locally. A service install also starts after login or boot, depending on your setup.</span></div></div>
+          </div>
+        </div>
+
+        <div class="install-panel" data-install-panel="docker" hidden>
+          <div class="install-panel-grid">
+            <div><p class="eyebrow">Portable and always on</p><h2>Run the supported Compose stack.</h2><p>Clone the source, create a local settings file, and start the SQLite image with a named volume. Keep one application replica when using SQLite.</p><div class="code-wrap"><pre id="docker-command"><code>git clone https://github.com/AES256Afro/Keel.git
+cd Keel
+cp .env.example .env
+docker compose up -d --build</code></pre><button class="copy-button" type="button" data-copy="#docker-command">Copy</button></div></div>
+            <div class="install-meta"><div><strong>Requirement</strong><span>Docker Engine or Docker Desktop with Compose v2.</span></div><div><strong>Data location</strong><span>The <code>keel-db</code> Docker volume. Backups are written to the configured host folder.</span></div><div><strong>Expected result</strong><span><code>docker compose ps</code> shows a healthy Keel container on port 3000.</span></div></div>
+          </div>
+        </div>
+
+        <div class="install-panel" data-install-panel="server" hidden>
+          <div class="install-panel-grid">
+            <div><p class="eyebrow">Home server or VPS</p><h2>Choose private reach or public HTTPS.</h2><p>For a home server, install Keel and use Tailscale Serve. For a public VPS, use Docker behind Caddy or another reverse proxy, restrict sign-in first, and keep tested off-machine backups.</p><div class="hero-actions"><a class="button" href="#home-server">Home server</a><a class="button button-secondary" href="#vps">VPS guide</a></div></div>
+            <div class="install-meta"><div><strong>Recommended private route</strong><span>Tailscale Serve gives HTTPS without public DNS or an open inbound port.</span></div><div><strong>Public route</strong><span>A domain, HTTPS reverse proxy, allowlist, disabled sign-ups, and backups are required.</span></div><div><strong>Cloudflare</strong><span>Tunnel, DNS, and R2 work with Keel. The full app does not run on Workers.</span></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-tight">
+      <div class="guide-layout shell">
+        <aside class="guide-nav" aria-label="Install guide sections">
+          <strong>On this page</strong>
+          <a href="#before">Before you start</a><a href="#windows">Windows</a><a href="#desktop">Linux desktop</a><a href="#local">macOS and Linux</a><a href="#docker">Docker</a><a href="#home-server">Home server</a><a href="#vps">VPS</a><a href="#update">Update</a><a href="#troubleshoot">Troubleshoot</a>
+        </aside>
+        <div class="prose">
+          <section id="before">
+            <h2>Before you start</h2>
+            <p>Decide whether Keel should be available only on this machine, privately on your own devices, or publicly on the internet. Local and Tailscale installs have fewer moving parts. A public server needs deliberate access control and HTTPS.</p>
+            <table class="comparison">
+              <thead><tr><th>Goal</th><th>Best route</th><th>What you manage</th></tr></thead>
+              <tbody><tr><td>Try Keel on one computer</td><td>Desktop package</td><td>Updates and backups</td></tr><tr><td>Use it across your own devices</td><td>Home server + Tailscale</td><td>The server, Tailscale, backups</td></tr><tr><td>Use a NAS or container host</td><td>Docker Compose</td><td>Volume, HTTPS, updates, backups</td></tr><tr><td>Reach it from anywhere without Tailscale</td><td>VPS + reverse proxy</td><td>Domain, server, HTTPS, access, backups</td></tr></tbody>
+            </table>
+            <div class="callout"><strong>Account ownership:</strong> the first registered account becomes the instance owner. On a shared or public server, set <code>KEEL_OWNER_EMAIL</code> before the first start.</div>
+          </section>
+
+          <section id="windows">
+            <h2>Windows</h2>
+            <h3>Desktop setup</h3>
+            <ol class="step-list">
+              <li>Download <a href="https://github.com/AES256Afro/Keel/releases/latest/download/Keel.Setup.1.2.0.exe">Keel Setup 1.2.0.exe</a> from the official release.</li>
+              <li>If SmartScreen appears, check that the file name and GitHub origin are correct, select <strong>More info</strong>, then <strong>Run anyway</strong>. Stop if the source is not the official release.</li>
+              <li>Complete setup and open Keel. The first start can take longer while the local database is created.</li>
+              <li>Register the owner account, finish the welcome tour, then create and download a test backup from Settings.</li>
+            </ol>
+            <h3>Always-on PowerShell service</h3>
+            <div class="code-wrap"><pre id="windows-command"><code>irm https://raw.githubusercontent.com/AES256Afro/Keel/main/install.ps1 | iex</code></pre><button class="copy-button" type="button" data-copy="#windows-command">Copy</button></div>
+            <p>For a custom location or port, download the script and run <code>.\install.ps1 -Dir C:\Keel -Port 3000 -Owner you@example.com -Service</code>. Open Task Scheduler and confirm the Keel task is running.</p>
+          </section>
+
+          <section id="desktop">
+            <h2>Linux desktop</h2>
+            <h3>AppImage</h3>
+            <div class="code-wrap"><pre id="appimage-command"><code>chmod +x Keel-1.2.0.AppImage
+./Keel-1.2.0.AppImage</code></pre><button class="copy-button" type="button" data-copy="#appimage-command">Copy</button></div>
+            <p>If the system reports that FUSE is missing, install the FUSE compatibility package for your distribution or use the Debian package instead.</p>
+            <h3>Debian or Ubuntu</h3>
+            <div class="code-wrap"><pre id="deb-command"><code>sudo apt install ./keel_1.2.0_amd64.deb</code></pre><button class="copy-button" type="button" data-copy="#deb-command">Copy</button></div>
+            <p>Launch Keel from the application menu. Both packages target x86-64 Linux.</p>
+          </section>
+
+          <section id="local">
+            <h2>macOS or Linux service</h2>
+            <ol class="step-list">
+              <li>Open Terminal on the machine that will run Keel.</li>
+              <li>Run the guided installer. Add <code>--service</code> so it starts automatically.</li>
+              <li>Read the final summary. It prints the install folder, data path, service name, and URL.</li>
+              <li>Open <code>http://localhost:3000</code>, register the intended owner, and download a test backup.</li>
+            </ol>
+            <div class="code-wrap"><pre id="local-command"><code>curl -fsSL https://raw.githubusercontent.com/AES256Afro/Keel/main/install.sh | bash -s -- --service</code></pre><button class="copy-button" type="button" data-copy="#local-command">Copy</button></div>
+            <p>Useful options: <code>--dir ~/keel</code>, <code>--port 8080</code>, <code>--owner you@example.com</code>, and <code>--yes</code>. Re-running the installer updates the application and leaves the local settings file in place.</p>
+          </section>
+
+          <section id="docker">
+            <h2>Docker Compose</h2>
+            <ol class="step-list">
+              <li>Install Docker Engine or Docker Desktop and confirm <code>docker compose version</code> works.</li>
+              <li>Clone Keel, copy <code>.env.example</code> to <code>.env</code>, and set the owner email and a backup passphrase.</li>
+              <li>Run <code>docker compose up -d --build</code>.</li>
+              <li>Run <code>docker compose ps</code>. Wait for the service to report healthy, then open port 3000.</li>
+              <li>Create a backup and confirm you can find it outside the container.</li>
+            </ol>
+            <div class="callout warning"><strong>Do not scale SQLite horizontally.</strong> Keep one Keel application replica with the SQLite volume. If a managed platform has no durable disk, build the PostgreSQL image and attach a managed PostgreSQL database.</div>
+            <p>Update with <code>git pull --ff-only && docker compose up -d --build</code>. Read the release notes first and keep a recent backup.</p>
+          </section>
+
+          <section id="home-server">
+            <h2>Private home server</h2>
+            <p>This is the recommended multi-device route when only your own devices need access.</p>
+            <ol class="step-list">
+              <li>Install Keel on the server with the shell installer or Docker.</li>
+              <li>Install Tailscale on the server and your client devices. Sign them into the same tailnet.</li>
+              <li>On the server, run <code>tailscale serve --bg 3000</code>.</li>
+              <li>Set <code>KEEL_WEBAUTHN_RP_ID</code> to the server's <code>*.ts.net</code> hostname and <code>KEEL_WEBAUTHN_ORIGIN</code> to the complete HTTPS URL.</li>
+              <li>Restart Keel and confirm the HTTPS address works from a second tailnet device.</li>
+            </ol>
+            <p>This route does not create public DNS and does not require opening port 3000 on the router.</p>
+          </section>
+
+          <section id="vps">
+            <h2>Public VPS</h2>
+            <p>Use a small Debian or Ubuntu server with Docker, a domain, and a reverse proxy such as Caddy. Point DNS to the server before requesting a certificate.</p>
+            <ol class="step-list">
+              <li>Set <code>KEEL_OWNER_EMAIL</code> and <code>KEEL_ALLOWED_EMAILS</code> to the intended account. Set <code>KEEL_DISABLE_SIGNUP=1</code>.</li>
+              <li>Set <code>KEEL_PUBLIC_URL</code>, WebAuthn origin, and relying-party ID to the final HTTPS hostname.</li>
+              <li>Put Keel behind HTTPS. Set <code>KEEL_TRUST_PROXY=1</code> only when your reverse proxy overwrites or appends the forwarding headers.</li>
+              <li>Start the production Compose stack and confirm <code>/api/health</code> reports OK over the public hostname.</li>
+              <li>Configure an off-machine backup destination and test a restore before trusting the deployment.</li>
+            </ol>
+            <p>Cloudflare can provide DNS, proxying, a Tunnel, and R2 backup storage. Keel itself is a Node server and does not run on Cloudflare Workers today.</p>
+          </section>
+
+          <section id="update">
+            <h2>Update without losing data</h2>
+            <table class="comparison"><thead><tr><th>Install</th><th>Update command</th></tr></thead><tbody><tr><td>Shell / CLI</td><td><code>keel update</code> or rerun the installer</td></tr><tr><td>Windows desktop</td><td>Download and run the new setup file</td></tr><tr><td>Linux desktop</td><td>Replace the AppImage or install the new `.deb`</td></tr><tr><td>Docker</td><td><code>git pull --ff-only && docker compose up -d --build</code></td></tr><tr><td>Source</td><td><code>git pull --ff-only && npm ci && npm run build</code>, then restart</td></tr></tbody></table>
+            <p>Keel applies its database migrations at startup. Keep a current backup and read release notes before upgrading across versions.</p>
+          </section>
+
+          <section id="troubleshoot">
+            <h2>Troubleshooting</h2>
+            <h3>The page does not open</h3><p>Confirm Keel is running, then try <code>http://127.0.0.1:3000</code>. For Docker, inspect <code>docker compose ps</code> and <code>docker compose logs --tail=100</code>. For a service install, use the exact status and log commands printed by the installer.</p>
+            <h3>Another program uses port 3000</h3><p>Choose another port during install, for example <code>--port 8080</code>, or set the deployment's <code>PORT</code> value. Then open that port in the browser.</p>
+            <h3>Security keys do not register</h3><p>WebAuthn needs HTTPS or localhost. Confirm the browser URL exactly matches <code>KEEL_WEBAUTHN_ORIGIN</code> and that the relying-party ID is only the hostname.</p>
+            <h3>A public server allows unexpected registration</h3><p>Stop the service, set <code>KEEL_ALLOWED_EMAILS</code> and <code>KEEL_DISABLE_SIGNUP=1</code>, restart, and review the audit log. Do this before sharing the URL.</p>
+            <h3>You are unsure where data lives</h3><p>Run <code>keel paths</code> for a CLI install. In Docker, inspect the named volume. Do not guess, and do not delete an install until a backup has been restored successfully elsewhere.</p>
+            <p>For a reproducible software bug, <a href="https://github.com/AES256Afro/Keel/issues">open an issue</a>. For a vulnerability, use the <a href="https://github.com/AES256Afro/Keel/security/advisories/new">private security report</a>.</p>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer"><div class="footer-grid shell"><div><a class="brand" href="/"><img src="/assets/keel-mark.svg" alt="" width="34" height="34"><span>Keel Notes</span></a><p class="footer-copy">Install locally, privately at home, or on infrastructure you control.</p></div><div class="footer-links"><a href="/install/">Install</a><a href="/storage/">Your data</a><a href="/security/">Security</a><a href="https://github.com/AES256Afro/Keel">Source</a><a href="https://github.com/AES256Afro/Keel/releases">Releases</a><a href="https://github.com/AES256Afro/Keel/blob/main/LICENSING.md">Licensing</a></div><div class="footer-legal"><span>Copyright 2026 Christopher Courtney</span><span>Source available under Business Source License 1.1</span></div></div></footer>
+  <script src="/assets/site.js" defer></script>
+</body>
+</html>

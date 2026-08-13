@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Keel sailboat mark</title>
+  <rect width="64" height="64" rx="14" fill="#16233d"/>
+  <path d="M31 7 L31 30 L12 30 Z" fill="#f2ede2"/>
+  <path d="M36 12 L36 30 L52 30 Z" fill="#f2ede2"/>
+  <path d="M9 34 L55 34 C51 41 44 44 33 44 C23 44 14 40 9 34Z" fill="#f2ede2"/>
+  <path d="M25 43 L33 43 L28 57 L21 57 Z" fill="#f2ede2"/>
+  <rect x="4" y="31.5" width="56" height="4" rx="2" fill="#5a8bd6"/>
+</svg>

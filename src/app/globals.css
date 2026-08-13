@@ -1,0 +1,294 @@
+@import "tailwindcss";
+
+/* ---------- Theme tokens ----------
+   Light is the default. Dark applies when the user picked "dark" in Settings
+   (data-theme="dark" on <html>) or when their OS prefers dark and they haven't
+   explicitly picked "light". */
+
+:root {
+  --bg: #ffffff;          /* main content surface */
+  --panel: #f7f6f3;       /* sidebar, board columns, code blocks */
+  --elevated: #ffffff;    /* popovers, cards, dialogs, form fields */
+  --hover: #efedea;       /* hover / active rows */
+  --row-hover: #fbfaf8;   /* subtle table-row hover */
+  --fg: #37352f;
+  --muted: #6f6e69;       /* secondary text */
+  --faint: #9b9a97;       /* placeholders, timestamps */
+  --border: #e5e4e1;
+  --border-soft: #f1f0ee;
+  --btn-bg: #37352f;      /* primary button */
+  --btn-fg: #ffffff;
+  --btn-hover: #000000;
+  --link: #2563eb;
+  --danger: #dc2626;
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+  --code-bg: #f1f0ee;
+  --code-fg: #c2410c;
+
+  --opt-gray-bg: #e3e2e0;   --opt-gray-fg: #32302c;
+  --opt-red-bg: #ffe2dd;    --opt-red-fg: #93312a;
+  --opt-orange-bg: #fadec9; --opt-orange-fg: #9a4b1e;
+  --opt-yellow-bg: #fdecc8; --opt-yellow-fg: #8a6116;
+  --opt-green-bg: #dbeddb;  --opt-green-fg: #2b5934;
+  --opt-blue-bg: #d3e5ef;   --opt-blue-fg: #28546c;
+  --opt-purple-bg: #e8deee; --opt-purple-fg: #57367c;
+  --opt-pink-bg: #f5e0e9;   --opt-pink-fg: #94355e;
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg: #191919;
+  --panel: #202020;
+  --elevated: #252525;
+  --hover: #2f2f2f;
+  --row-hover: #222222;
+  --fg: #e6e5e2;
+  --muted: #9b9a97;
+  --faint: #6f6e69;
+  --border: #373737;
+  --border-soft: #2c2c2c;
+  --btn-bg: #e6e5e2;
+  --btn-fg: #191919;
+  --btn-hover: #ffffff;
+  --link: #529cca;
+  --danger: #f87171;
+  --danger-bg: #3a2222;
+  --danger-border: #5c2e2e;
+  --code-bg: #2c2c2c;
+  --code-fg: #f0a06a;
+
+  --opt-gray-bg: #454440;   --opt-gray-fg: #d8d7d4;
+  --opt-red-bg: #5c3230;    --opt-red-fg: #f3b8b2;
+  --opt-orange-bg: #5a3a24; --opt-orange-fg: #f0c09a;
+  --opt-yellow-bg: #56452a; --opt-yellow-fg: #eed49a;
+  --opt-green-bg: #2c4532;  --opt-green-fg: #b5dcbb;
+  --opt-blue-bg: #28405c;   --opt-blue-fg: #aecde4;
+  --opt-purple-bg: #443355; --opt-purple-fg: #d3bce8;
+  --opt-pink-bg: #532e40;   --opt-pink-fg: #ecb8cf;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #191919;
+    --panel: #202020;
+    --elevated: #252525;
+    --hover: #2f2f2f;
+    --row-hover: #222222;
+    --fg: #e6e5e2;
+    --muted: #9b9a97;
+    --faint: #6f6e69;
+    --border: #373737;
+    --border-soft: #2c2c2c;
+    --btn-bg: #e6e5e2;
+    --btn-fg: #191919;
+    --btn-hover: #ffffff;
+    --link: #529cca;
+    --danger: #f87171;
+    --danger-bg: #3a2222;
+    --danger-border: #5c2e2e;
+    --code-bg: #2c2c2c;
+    --code-fg: #f0a06a;
+
+    --opt-gray-bg: #454440;   --opt-gray-fg: #d8d7d4;
+    --opt-red-bg: #5c3230;    --opt-red-fg: #f3b8b2;
+    --opt-orange-bg: #5a3a24; --opt-orange-fg: #f0c09a;
+    --opt-yellow-bg: #56452a; --opt-yellow-fg: #eed49a;
+    --opt-green-bg: #2c4532;  --opt-green-fg: #b5dcbb;
+    --opt-blue-bg: #28405c;   --opt-blue-fg: #aecde4;
+    --opt-purple-bg: #443355; --opt-purple-fg: #d3bce8;
+    --opt-pink-bg: #532e40;   --opt-pink-fg: #ecb8cf;
+
+    color-scheme: dark;
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+/* ---------- Editor (TipTap / ProseMirror) ---------- */
+
+.keel-editor .ProseMirror {
+  outline: none;
+  min-height: 40vh;
+  padding-bottom: 20vh;
+}
+
+.keel-editor .ProseMirror > * + * {
+  margin-top: 0.35rem;
+}
+
+.keel-editor .ProseMirror h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  margin-top: 1.4rem;
+}
+
+.keel-editor .ProseMirror h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 1.1rem;
+}
+
+.keel-editor .ProseMirror h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 0.9rem;
+}
+
+.keel-editor .ProseMirror ul {
+  list-style: disc;
+  padding-left: 1.5rem;
+}
+
+.keel-editor .ProseMirror ol {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+
+.keel-editor .ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.25rem;
+}
+
+.keel-editor .ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.keel-editor .ProseMirror ul[data-type="taskList"] li > label {
+  margin-top: 0.3rem;
+}
+
+.keel-editor .ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: var(--faint);
+  text-decoration: line-through;
+}
+
+.keel-editor .ProseMirror blockquote {
+  border-left: 3px solid var(--fg);
+  padding-left: 0.9rem;
+  margin: 0.5rem 0;
+}
+
+.keel-editor .ProseMirror pre {
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 0.9rem 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875rem;
+  overflow-x: auto;
+}
+
+.keel-editor .ProseMirror code {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875em;
+  color: var(--code-fg);
+}
+
+.keel-editor .ProseMirror pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.keel-editor .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1rem 0;
+}
+
+.keel-editor .ProseMirror a {
+  color: var(--link);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.keel-editor .ProseMirror p.is-editor-empty:first-child::before {
+  color: var(--faint);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+/* ---------- Select option colors ---------- */
+
+.opt-gray   { background: var(--opt-gray-bg);   color: var(--opt-gray-fg); }
+.opt-red    { background: var(--opt-red-bg);    color: var(--opt-red-fg); }
+.opt-orange { background: var(--opt-orange-bg); color: var(--opt-orange-fg); }
+.opt-yellow { background: var(--opt-yellow-bg); color: var(--opt-yellow-fg); }
+.opt-green  { background: var(--opt-green-bg);  color: var(--opt-green-fg); }
+.opt-blue   { background: var(--opt-blue-bg);   color: var(--opt-blue-fg); }
+.opt-purple { background: var(--opt-purple-bg); color: var(--opt-purple-fg); }
+.opt-pink   { background: var(--opt-pink-bg);   color: var(--opt-pink-fg); }
+
+/* ---------------------------------------------------------------------------
+   Focus mode
+   ---------------------------------------------------------------------------
+   Driven by classes on <html> (see src/components/FocusMode.tsx) so the layout
+   chrome can be hidden without the editor knowing what the layout is.
+
+   Each effect is a separate class rather than one "focus" class, because they
+   are independently useful: some people want the dimming without losing the
+   sidebar, and typewriter scrolling is divisive.
+--------------------------------------------------------------------------- */
+
+/* Hide everything that isn't the document being written. */
+.keel-focus-chrome aside,
+.keel-focus-chrome header .keel-page-actions,
+.keel-focus-chrome .keel-hide-in-focus {
+  display: none;
+}
+
+.keel-focus main {
+  /* A comfortable measure - long lines are the enemy of sustained reading. */
+  max-width: 46rem;
+  margin-inline: auto;
+}
+
+/* Dim every block except the one the caret is in. The editor tags the active
+   paragraph; without JS support this simply does nothing, which is the right
+   failure mode. */
+.keel-focus-dim .keel-editor .ProseMirror > * {
+  opacity: 0.35;
+  transition: opacity 180ms ease;
+}
+
+.keel-focus-dim .keel-editor .ProseMirror > .keel-active-block {
+  opacity: 1;
+}
+
+/* Typewriter scrolling: enough padding below the text that the caret can sit
+   in the middle of the viewport rather than crawling to the bottom edge. The
+   scrolling itself is done in JS - CSS cannot know where the caret is. */
+.keel-focus-typewriter .keel-editor {
+  padding-bottom: 45vh;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .keel-focus-dim .keel-editor .ProseMirror > * {
+    transition: none;
+  }
+}
+
+/* Images in the editor - pasted attachments and mirrored OneNote captures. */
+.keel-editor .ProseMirror img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1rem 0;
+  border-radius: 0.6rem;
+  border: 1px solid var(--border-soft);
+}

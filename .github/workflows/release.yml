@@ -1,0 +1,51 @@
+# Build the Keel release tarballs on a real machine per platform - the Prisma
+# query engine is a native binary, so a macOS build can't produce the Linux
+# artifact and vice versa. Runs when a v* tag is pushed; uploads each build to
+# that tag's GitHub release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: macos-14
+            label: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - name: Build the release
+        run: node scripts/package-release.mjs
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+      - name: Smoke-test the artifact
+        run: |
+          set -e
+          TARBALL=$(ls dist/*.tar.gz | head -1)
+          DIR=$(mktemp -d)
+          tar -xzf "$TARBALL" -C "$DIR"
+          APP=$(ls -d "$DIR"/keel-*)
+          KEEL_HOME="$DIR/home" PORT=3999 node "$APP/bin/keel.mjs" start
+          curl -fsS http://127.0.0.1:3999/api/health | grep -q '"ok":true'
+          KEEL_HOME="$DIR/home" node "$APP/bin/keel.mjs" stop
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: dist/*.tar.gz

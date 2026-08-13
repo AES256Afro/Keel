@@ -1,0 +1,501 @@
+// GENERATED - do not edit.
+// Source: prisma/schema.prisma. Regenerate with `npm run db:sync-postgres`.
+//
+// Identical to the SQLite schema except for the datasource provider. It lives
+// here because Prisma resolves a migrations directory relative to the schema,
+// and the PostgreSQL migration SQL differs from SQLite's.
+
+// Keel data model.
+// SQLite is used for local development; the schema is portable to PostgreSQL
+// (change the provider and DATABASE_URL). JSON payloads are stored as strings
+// so the schema works on both engines - src/lib/json.ts wraps parse/serialize.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  // Shown in the UI instead of the real name. Unique: @mention resolution
+  // matches on username (see the comments route), so two users sharing one
+  // would silently misdeliver notifications. Enforced in the database, not
+  // just the API layer - a findFirst-then-write check is a race.
+  username     String?  @unique
+  name         String
+  // Null for accounts created via Google sign-in (no password login).
+  passwordHash String?
+  googleId     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions      Session[]
+  credentials   Credential[]
+  memberships   WorkspaceMember[]
+  ownedSpaces   Workspace[]       @relation("WorkspaceOwner")
+  createdPages  Page[]            @relation("PageCreatedBy")
+  editedPages   Page[]            @relation("PageEditedBy")
+  comments      Comment[]
+  notifications Notification[]
+  favorites     Favorite[]
+  visits        RecentVisit[]
+  attachments   Attachment[]
+
+  // Null until the first-run welcome has been seen (or skipped) - the only
+  // state the onboarding flow keeps.
+  onboardedAt   DateTime?
+}
+
+// A registered WebAuthn/FIDO2 authenticator (e.g. a YubiKey) used as a second
+// factor. Once a user has one, their sign-in requires it. A credential id
+// identifies exactly one authenticator, so it maps to exactly one user.
+model Credential {
+  id           String    @id @default(cuid())
+  userId       String
+  credentialId String    @unique // base64url of the raw credential id
+  publicKey    String // base64url of the COSE public key
+  counter      Int       @default(0)
+  transports   String? // JSON array of transport strings
+  deviceType   String? // singleDevice | multiDevice
+  backedUp     Boolean   @default(false)
+  name         String    @default("Security key")
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// A record of privileged actions: who changed instance access, started a
+// tunnel, connected cloud storage, invited a member, restored a backup.
+//
+// Written from the API layer, never editable through it. Without this there is
+// no way to reconstruct what happened after a compromise - which is exactly the
+// position the instance-owner bug left this app in.
+model AuditEvent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  // Null when the actor is gone; the event outlives the account.
+  userId    String?
+  // Denormalised so the record still reads correctly after a user is deleted.
+  actor     String
+  // Dotted verb, e.g. "access.update", "tunnel.start", "member.invite".
+  action    String
+  // What it happened to, when there is a single obvious target.
+  target    String?
+  // Small JSON blob of relevant detail. Never credentials.
+  detail    String?
+  ip        String?
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+}
+
+// Instance-wide key/value settings (access control, tunnel, R2, …). Single
+// owner only - this is a personal deployment, not a multi-tenant host.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// ---- Optional built-in public site ------------------------------------------
+// Portfolio content managed from the owner-only /admin portal and shown on the
+// public marketing site. Not tied to a workspace - this is the owner's site.
+
+model Project {
+  id          String   @id @default(cuid())
+  title       String
+  description String   @default("")
+  url         String? // live link
+  repoUrl     String? // GitHub / source
+  tags        String? // JSON array of strings
+  featured    Boolean  @default(false)
+  published   Boolean  @default(true)
+  sortOrder   Float    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model NewsPost {
+  id          String    @id @default(cuid())
+  // The slug is the public URL (/news/<slug>), so it must be unique.
+  slug        String    @unique
+  title       String
+  excerpt     String    @default("")
+  body        String    @default("") // Markdown
+  published   Boolean   @default(false)
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  // Lets the maintenance sweep delete expired rows without a full scan.
+  @@index([expiresAt])
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Automatic backup settings (see src/lib/backup.ts)
+  backupEnabled       Boolean   @default(false)
+  backupIntervalHours Int       @default(24)
+  backupDir           String? // custom location; can be a OneDrive/Google Drive sync folder
+  backupKeep          Int       @default(14)
+  backupEncrypt       Boolean   @default(false)
+  lastBackupAt        DateTime?
+  lastBackupError     String?
+
+  // Cloud backup connection (Google Drive / OneDrive), owner-managed.
+  cloudProvider     String? // google | onedrive
+  cloudRefreshToken String?
+  cloudEmail        String? // account label shown in Settings
+  cloudFolderId     String? // Drive folder id (Google only)
+
+  // OneNote read-only mirror connection and hourly sync state.
+  oneNoteRefreshToken String?
+  oneNoteEmail        String?
+  oneNoteEnabled      Boolean   @default(false)
+  oneNoteLastSyncAt   DateTime?
+  oneNoteLastError    String?
+
+  owner     User              @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  members   WorkspaceMember[]
+  invites   WorkspaceInvite[]
+  attachments Attachment[]
+  pages     Page[]
+  databases Database[]
+  pageLinks PageLink[]
+  pageTags  PageTag[]
+}
+
+// Invitation for someone who hasn't registered yet; converted to a
+// WorkspaceMember automatically when they sign up with this email.
+model WorkspaceInvite {
+  id          String   @id @default(cuid())
+  workspaceId String
+  email       String
+  role        String   @default("editor") // editor | viewer
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, email])
+}
+
+model WorkspaceMember {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        String   @default("owner") // owner | editor | commenter | viewer
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+}
+
+model Page {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  parentPageId String?
+  type         String    @default("document") // document | database | record
+  title        String    @default("")
+  icon         String?
+  // TipTap document JSON, serialized. Blocks live inside this document.
+  content      String?
+  // The document flattened to visible text, maintained on every save.
+  //
+  // Search used to LIKE over `content`, which is the serialized editor document
+  // - so every page matched "paragraph" and "doc", and a word split across two
+  // marks never matched at all. This is what search actually reads.
+  plainText    String?
+  sortOrder    Float     @default(0)
+  createdById  String
+  editedById   String?
+  archivedAt   DateTime? // non-null = in trash
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  externalSource    String?
+  externalId        String?
+  externalUpdatedAt DateTime?
+  externalHash      String?
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent    Page?           @relation("PageTree", fields: [parentPageId], references: [id], onDelete: SetNull)
+  children  Page[]          @relation("PageTree")
+  createdBy User            @relation("PageCreatedBy", fields: [createdById], references: [id])
+  editedBy  User?           @relation("PageEditedBy", fields: [editedById], references: [id])
+  database  Database?       @relation("DatabasePage")
+  record    DatabaseRecord? @relation("RecordPage")
+  comments  Comment[]
+  favorites Favorite[]
+  visits    RecentVisit[]
+  linksOut  PageLink[]      @relation("LinkSource")
+  linksIn   PageLink[]      @relation("LinkTarget")
+  tags      PageTag[]
+  attachments Attachment[]
+
+  @@index([workspaceId, parentPageId])
+  // Link resolution looks pages up by title on every autosave that has a
+  // [[wikilink]] - without this it scans every live page in the workspace.
+  @@index([workspaceId, title])
+  @@index([workspaceId, archivedAt])
+  // Search orders by updatedAt within a workspace.
+  @@index([workspaceId, updatedAt])
+  // Search also excludes archived pages - this covers the whole predicate.
+  @@index([workspaceId, archivedAt, updatedAt])
+  @@unique([workspaceId, externalSource, externalId])
+}
+
+model Database {
+  id          String   @id @default(cuid())
+  workspaceId String
+  pageId      String   @unique // the page that hosts this database
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page       Page               @relation("DatabasePage", fields: [pageId], references: [id], onDelete: Cascade)
+  properties DatabaseProperty[]
+  records    DatabaseRecord[]
+  views      DatabaseView[]
+}
+
+// A saved way of looking at a database: table, list, board or mind map, each
+// with its own grouping, filter, sort and layout. Views are what make the board
+// and the mind map two faces of the SAME records rather than separate features
+// - switch the view, keep the data.
+model DatabaseView {
+  id         String   @id @default(cuid())
+  databaseId String
+  name       String
+  type       String   @default("table") // table | list | board | mindmap | timeline
+  sortOrder  Float    @default(0)
+  // JSON; shape in src/lib/views.ts (grouping, filters, WIP limits, …).
+  config     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  database Database @relation(fields: [databaseId], references: [id], onDelete: Cascade)
+
+  @@index([databaseId])
+}
+
+model DatabaseProperty {
+  id         String   @id @default(cuid())
+  databaseId String
+  name       String
+  type       String // text | number | select | multiSelect | date | checkbox | url
+  settings   String? // JSON: { options: [{ id, name, color }] } for selects
+  sortOrder  Float    @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  database Database        @relation(fields: [databaseId], references: [id], onDelete: Cascade)
+  values   DatabaseValue[]
+
+  @@index([databaseId])
+}
+
+model DatabaseRecord {
+  id         String   @id @default(cuid())
+  databaseId String
+  pageId     String   @unique // every record opens as a page
+  sortOrder  Float    @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // ---- Record tree -------------------------------------------------------
+  // A first-class column rather than a property, because the mind map walks it
+  // on every render and the database should enforce that an edge points at a
+  // real record. SetNull, not Cascade: deleting a parent must not silently take
+  // its whole subtree with it.
+  parentRecordId String?
+
+  // ---- Mind-map layout ---------------------------------------------------
+  // Stored per record rather than inside a view's config blob: dragging a node
+  // then writes one small row instead of rewriting a JSON document containing
+  // every node's position. Null means "not placed yet" - auto-layout fills it.
+  mapX      Float?
+  mapY      Float?
+  collapsed Boolean @default(false) // branch folded in the mind map
+
+  database Database         @relation(fields: [databaseId], references: [id], onDelete: Cascade)
+  page     Page             @relation("RecordPage", fields: [pageId], references: [id], onDelete: Cascade)
+  values   DatabaseValue[]
+  parent   DatabaseRecord?  @relation("RecordTree", fields: [parentRecordId], references: [id], onDelete: SetNull)
+  children DatabaseRecord[] @relation("RecordTree")
+
+  @@index([databaseId])
+  @@index([parentRecordId])
+}
+
+// An edge between pages, derived from [[wikilinks]] in the source document and
+// rebuilt on every save.
+//
+// Derived rather than authored: the document is the truth, and a link table
+// that can disagree with it is worse than none. Kept as rows rather than
+// recomputed on read because "what links here" is a reverse lookup, and
+// scanning every page's text to answer it is the thing that makes backlinks
+// feel slow in other tools.
+model PageLink {
+  id          String   @id @default(cuid())
+  workspaceId String
+  fromPageId  String
+  // Null when the link points at a title that does not exist yet - Obsidian
+  // calls these "unresolved", and they are how you write forward.
+  toPageId    String?
+  // The text inside the brackets, kept so an unresolved link can resolve later
+  // when a page with that title appears.
+  targetTitle String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  from      Page      @relation("LinkSource", fields: [fromPageId], references: [id], onDelete: Cascade)
+  to        Page?     @relation("LinkTarget", fields: [toPageId], references: [id], onDelete: Cascade)
+
+  @@index([toPageId])
+  @@index([fromPageId])
+  // Resolving unresolved links when a page is created or renamed.
+  @@index([workspaceId, targetTitle])
+  // resolveLinksTo fetches this workspace's unresolved links (toPageId null) on create/rename.
+  @@index([workspaceId, toPageId])
+}
+
+// A #tag occurrence. Same reasoning as PageLink: derived from the document,
+// stored so "everything tagged #x" is an index lookup rather than a scan.
+model PageTag {
+  id          String @id @default(cuid())
+  workspaceId String
+  pageId      String
+  // Normalised to lower case; `label` keeps what the author typed.
+  tag         String
+  label       String
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page      Page      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, tag])
+  @@index([workspaceId, tag])
+}
+
+model Comment {
+  id         String    @id @default(cuid())
+  pageId     String
+  authorId   String
+  body       String
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  page   Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([pageId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String // mention
+  message   String
+  pageId    String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  // The bell lists a user's notifications newest-first.
+  @@index([userId, createdAt])
+  // Retention sweep deletes read notifications older than a cutoff.
+  @@index([createdAt])
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  pageId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, pageId])
+}
+
+model RecentVisit {
+  id        String   @id @default(cuid())
+  userId    String
+  pageId    String
+  visitedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, pageId])
+  // The sidebar reads the five most recent per user.
+  @@index([userId, visitedAt])
+}
+
+model DatabaseValue {
+  id         String   @id @default(cuid())
+  recordId   String
+  propertyId String
+  value      String? // JSON-encoded value, shape depends on property type
+  updatedAt  DateTime @updatedAt
+
+  record   DatabaseRecord   @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  property DatabaseProperty @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@unique([recordId, propertyId])
+}
+
+model Attachment {
+  id          String   @id @default(cuid())
+  workspaceId String
+  // The page it was uploaded into. Deleting that page forever deletes its
+  // files too - an attachment has exactly one home, so storage cannot leak.
+  // (Archiving a page keeps the row; only hard delete cascades.)
+  pageId      String
+  name        String
+  // Sniffed from the bytes for the inline-viewable types, never trusted from
+  // the client. Everything unrecognised is stored as application/octet-stream
+  // and always served as a download.
+  mime        String
+  size        Int
+  sha256      String
+  data        Bytes
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page      Page      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([pageId])
+  // Quota checks SUM(size) per workspace - the size in the index makes that an
+  // index-only scan instead of reading every attachment row.
+  @@index([workspaceId, size])
+}
