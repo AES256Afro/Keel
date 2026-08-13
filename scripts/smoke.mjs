@@ -15,6 +15,7 @@ import { chromium } from "playwright-core";
 import { chromiumLaunchOptions } from "./find-chromium.mjs";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
+const APP_ORIGIN = new URL(BASE).origin;
 const EMAIL = `smoke${Date.now()}@example.com`;
 const SHOT_DIR = process.env.SHOT_DIR;
 const SELECT_ALL = process.platform === "darwin" ? "Meta+a" : "Control+a";
@@ -25,6 +26,13 @@ const ok = (name, cond) => {
   results.push(`${cond ? "PASS" : "FAIL"}  ${name}`);
   if (!cond) process.exitCode = 1;
 };
+
+const mutationHeaders = (cookie) => ({
+  ...(cookie ? { cookie } : {}),
+  "Content-Type": "application/json",
+  Origin: APP_ORIGIN,
+  "Sec-Fetch-Site": "same-origin",
+});
 
 /** Poll the notifications API until a predicate matches (tolerates write lag). */
 async function pollNotifications(cookieHeader, predicate, tries = 10) {
@@ -198,45 +206,86 @@ try {
   ok("workspace rename works", true);
 
   // 14. Backup now + listed in folder
+  const initialBackupResponse = page.waitForResponse(
+    (res) =>
+      new URL(res.url()).pathname === "/api/workspace/backups" &&
+      res.request().method() === "POST"
+  );
   await page.click('button:text-is("Back up now")');
-  await page.waitForSelector("text=Backup written");
-  await page.waitForSelector('li:has-text("keel-")');
-  ok("backup to folder works and is listed", true);
+  const initialBackup = await (await initialBackupResponse).json();
+  await page.waitForSelector("text=/^Backup .+ written(?: and uploaded to .+)?$/");
+  const initialBackupRow = page.locator("li", { hasText: initialBackup.file });
+  await initialBackupRow.waitFor();
+  ok("backup to folder works and is listed", typeof initialBackup.file === "string");
 
   // 15. Restore the folder backup (non-destructive)
   page.once("dialog", (d) => d.accept());
-  await page.locator('li:has-text("keel-")').first().locator('button:text-is("Restore")').click();
+  await initialBackupRow.locator('button:text-is("Restore")').click();
   await page.waitForSelector("text=Restored", { timeout: 15000 });
   ok("restore from folder backup works", true);
 
-  // 15b. Encrypted manual backup via the masked passphrase dialog
-  await page.click('label:has-text("Encrypt backups") input');
-  await page.click('button:text-is("Back up now")');
-  await page.waitForSelector('input[type="password"][placeholder="Passphrase"]');
-  await page.fill('input[placeholder="Passphrase"]', "dialog-pass-123");
-  await page.click('button:text-is("OK")');
-  await page.waitForSelector('li:has-text(".keelbak")');
-  ok("encrypted backup via masked passphrase dialog", true);
+  const wsCookies = await page.context().cookies();
+  const wsCookieHeader = wsCookies.map((c) => `${c.name}=${c.value}`).join("; ");
 
-  // 15c. Restore the encrypted folder backup (dialog asks for the passphrase)
+  // 15b. Encrypted manual backup via either the host-managed secret or the
+  // masked passphrase dialog.
+  await page.click('label:has-text("Encrypt backups") input');
+  const encryptedUiBackupResponse = page.waitForResponse(
+    (res) =>
+      new URL(res.url()).pathname === "/api/workspace/backups" &&
+      res.request().method() === "POST"
+  );
+  await page.click('button:text-is("Back up now")');
+  const backupPassphrase = page.locator('input[type="password"][placeholder="Passphrase"]');
+  const backupPromptVisible = await backupPassphrase
+    .waitFor({ state: "visible", timeout: 1_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (backupPromptVisible) {
+    await backupPassphrase.fill("dialog-pass-123");
+    await page.click('button:text-is("OK")');
+  }
+  const encryptedUiBackup = await (await encryptedUiBackupResponse).json();
+  await page.waitForSelector("text=/^Backup .+\\.keelbak written(?: and uploaded to .+)?$/");
+  await page.locator("li", { hasText: encryptedUiBackup.file }).waitFor();
+  ok(
+    "encrypted backup uses a managed or masked passphrase",
+    typeof encryptedUiBackup.file === "string" && encryptedUiBackup.file.endsWith(".keelbak")
+  );
+
+  // 15c. Create a known-passphrase encrypted backup through the same API, then
+  // restore that exact file. This is deterministic even when the guided
+  // installer supplied a write-only managed passphrase to the UI.
+  const knownBackupRes = await fetch(`${BASE}/api/workspace/backups`, {
+    method: "POST",
+    headers: mutationHeaders(wsCookieHeader),
+    body: JSON.stringify({ encrypt: true, passphrase: "dialog-pass-123" }),
+  });
+  const knownBackup = await knownBackupRes.json().catch(() => ({}));
+  ok(
+    "known-passphrase encrypted backup can be created",
+    knownBackupRes.ok && typeof knownBackup.file === "string" && knownBackup.file.endsWith(".keelbak")
+  );
+  if (!knownBackupRes.ok || typeof knownBackup.file !== "string") {
+    throw new Error("Could not create the known-passphrase encrypted backup");
+  }
+  await page.reload();
+  await page.waitForSelector("text=Backups & data safety");
+  const knownBackupRow = page.locator("li", { hasText: knownBackup.file });
+  await knownBackupRow.waitFor();
   page.once("dialog", (d) => d.accept());
-  await page
-    .locator('li:has-text(".keelbak")')
-    .first()
-    .locator('button:text-is("Restore")')
-    .click();
-  await page.waitForSelector('input[type="password"][placeholder="Passphrase"]');
-  await page.fill('input[placeholder="Passphrase"]', "dialog-pass-123");
+  await knownBackupRow.locator('button:text-is("Restore")').click();
+  const restorePassphrase = page.locator('input[type="password"][placeholder="Passphrase"]');
+  await restorePassphrase.waitFor({ state: "visible" });
+  await restorePassphrase.fill("dialog-pass-123");
   await page.click('button:text-is("OK")');
   await page.waitForSelector("text=Restored", { timeout: 15000 });
   ok("encrypted folder backup restores with passphrase", true);
 
   // 16. Encrypted export/import round trip via API
-  const wsCookies = await page.context().cookies();
-  const wsCookieHeader = wsCookies.map((c) => `${c.name}=${c.value}`).join("; ");
   const expRes = await fetch(`${BASE}/api/workspace/export`, {
     method: "POST",
-    headers: { cookie: wsCookieHeader, "Content-Type": "application/json" },
+    headers: mutationHeaders(wsCookieHeader),
     body: JSON.stringify({ passphrase: "secret-passphrase-123" }),
   });
   const encText = await expRes.text();
@@ -249,7 +298,11 @@ try {
   badForm.set("passphrase", "wrong-passphrase");
   const badRes = await fetch(`${BASE}/api/workspace/import`, {
     method: "POST",
-    headers: { cookie: wsCookieHeader },
+    headers: {
+      cookie: wsCookieHeader,
+      Origin: APP_ORIGIN,
+      "Sec-Fetch-Site": "same-origin",
+    },
     body: badForm,
   });
   ok("wrong passphrase is rejected", badRes.status === 400);
@@ -258,7 +311,11 @@ try {
   goodForm.set("passphrase", "secret-passphrase-123");
   const goodRes = await fetch(`${BASE}/api/workspace/import`, {
     method: "POST",
-    headers: { cookie: wsCookieHeader },
+    headers: {
+      cookie: wsCookieHeader,
+      Origin: APP_ORIGIN,
+      "Sec-Fetch-Site": "same-origin",
+    },
     body: goodForm,
   });
   const goodData = await goodRes.json().catch(() => ({}));
@@ -322,10 +379,14 @@ try {
     .first()
     .selectOption("viewer");
   await page.click('button:text-is("Invite")');
-  await page.waitForSelector("text=Pending invite");
+  const pendingGuestInvite = page
+    .locator("li", { hasText: guestEmail })
+    .filter({ hasText: "Pending invite" });
+  await pendingGuestInvite.waitFor();
   ok("owner can invite by email before the person registers", true);
 
-  // 21. The guest registers and the invite becomes a membership
+  // 21. The guest registers; password signup leaves the invite pending until
+  // the owner explicitly confirms the now-existing account.
   const guestCtx = await browser.newContext();
   const guest = await guestCtx.newPage();
   guest.setDefaultTimeout(15000);
@@ -337,13 +398,43 @@ try {
   await guest.waitForURL(/\/welcome$/);
   await guest.click('button:text-is("Skip all of this")');
   await guest.waitForURL(/\/p\//);
-  // switch to the shared workspace
-  await guest.locator("aside button", { hasText: "Guest User's Workspace" }).click();
-  await guest.waitForSelector("text=Workspaces");
-  await guest.click('button:has-text("Renamed Vault")');
-  // wait until the sidebar header shows the shared workspace (re-render done)
-  await guest.waitForSelector('aside >> text=Renamed Vault', { timeout: 10000 });
-  await guest.waitForSelector("aside >> text=Getting started");
+  // Password registration intentionally leaves an email invite pending because
+  // it cannot prove control of that mailbox. The workspace owner confirms the
+  // now-existing account by inviting it again.
+  await page.bringToFront();
+  await page.goto(`${BASE}/settings`);
+  await page.waitForSelector("text=Members & sharing");
+  await pendingGuestInvite.waitFor();
+  ok("password registration leaves the email invite pending", true);
+  await page.fill('input[placeholder="person@example.com"]', guestEmail);
+  await page
+    .locator('section:has-text("Members & sharing") select')
+    .first()
+    .selectOption("viewer");
+  await page.click('button:text-is("Invite")');
+  const confirmedGuestRow = page.locator("li", { hasText: guestEmail });
+  await confirmedGuestRow.locator("select").waitFor();
+  ok(
+    "owner confirmation converts the pending invite into one member",
+    (await confirmedGuestRow.count()) === 1 &&
+      (await confirmedGuestRow.filter({ hasText: "Pending invite" }).count()) === 0
+  );
+  await guest.bringToFront();
+  await guest.reload();
+  // Switch to the shared workspace through the exact current-workspace header.
+  await guest.getByTitle("Guest User's Workspace", { exact: true }).click();
+  await guest.locator("aside").getByText("Workspaces", { exact: true }).waitFor();
+  const beforeWorkspaceSwitch = guest.url();
+  const switched = guest.waitForResponse(
+    (res) =>
+      new URL(res.url()).pathname === "/api/workspace/switch" &&
+      res.request().method() === "POST" &&
+      res.ok()
+  );
+  await guest.locator("aside button").filter({ hasText: "Renamed Vault" }).click();
+  await switched;
+  await guest.waitForURL((url) => url.href !== beforeWorkspaceSwitch && url.pathname.startsWith("/p/"));
+  await guest.locator('aside button[title="Renamed Vault"]').waitFor();
   ok("invited user can switch into the shared workspace", true);
 
   // 22. Viewer is read-only: no create buttons, mutations rejected server-side
@@ -355,7 +446,7 @@ try {
   const guestCookieHeader = guestCookies.map((c) => `${c.name}=${c.value}`).join("; ");
   const forbidden = await fetch(`${BASE}/api/pages`, {
     method: "POST",
-    headers: { cookie: guestCookieHeader, "Content-Type": "application/json" },
+    headers: mutationHeaders(guestCookieHeader),
     body: JSON.stringify({ type: "document" }),
   });
   ok("viewer page creation is rejected with 403", forbidden.status === 403);
@@ -368,7 +459,7 @@ try {
   await page.waitForTimeout(600);
   const allowed = await fetch(`${BASE}/api/pages`, {
     method: "POST",
-    headers: { cookie: guestCookieHeader, "Content-Type": "application/json" },
+    headers: mutationHeaders(guestCookieHeader),
     body: JSON.stringify({ type: "document" }),
   });
   ok("promoted editor can create pages", allowed.status === 201);

@@ -201,8 +201,8 @@ model Workspace {
   pageTags    PageTag[]
 }
 
-// Invitation for someone who hasn't registered yet; converted to a
-// WorkspaceMember automatically when they sign up with this email.
+// Invitation for someone who hasn't registered yet. Verified Google signup
+// may convert it automatically; password accounts require owner confirmation.
 model WorkspaceInvite {
   id          String   @id @default(cuid())
   workspaceId String
