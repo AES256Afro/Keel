@@ -21,7 +21,7 @@
       <button class="nav-toggle" type="button" aria-label="Open navigation" aria-expanded="false" data-nav-toggle>Menu</button>
       <div class="nav-links" data-nav-menu>
         <a href="/#why">Why Keel</a><a href="/install/" aria-current="page">Install</a><a href="/storage/">Your data</a><a href="/security/">Security</a>
-        <a class="button button-small" href="https://github.com/AES256Afro/Keel/releases/latest">Get Keel 1.2.2</a>
+        <a class="button button-small" href="https://github.com/AES256Afro/Keel/releases/latest">Get Keel 1.2.3</a>
       </div>
     </nav>
   </header>
@@ -32,7 +32,7 @@
         <p class="eyebrow">Guided install</p>
         <h1>Choose how Keel should live.</h1>
         <p class="lede">Use it on one computer, keep it running at home, or put it on a server. These routes use the same application and can move the same workspace between them.</p>
-        <div class="status-row"><span class="status-pill">Current release: 1.2.2</span><span class="status-pill">Node.js 20+ for server installs</span><span class="status-pill">SQLite by default</span></div>
+        <div class="status-row"><span class="status-pill">Current release: 1.2.3</span><span class="status-pill">Node.js 20+ for server installs</span><span class="status-pill">SQLite by default</span></div>
       </div>
     </section>
 
@@ -48,7 +48,7 @@
 
         <div class="install-panel" data-install-panel="windows">
           <div class="install-panel-grid">
-            <div><p class="eyebrow">Recommended for Windows</p><h2>Use the desktop installer.</h2><p>Download the setup file, run it, and open Keel. Windows SmartScreen may show an unrecognized-publisher warning because this release is not code-signed yet. Confirm the file came from the official GitHub release before continuing.</p><div class="hero-actions"><a class="button" href="https://github.com/AES256Afro/Keel/releases/latest/download/Keel.Setup.1.2.2.exe">Download Windows setup</a><a class="button button-secondary" href="#windows">See every step</a></div></div>
+            <div><p class="eyebrow">Recommended for Windows</p><h2>Use the desktop installer.</h2><p>Download the setup file, run it, and open Keel. Windows SmartScreen may show an unrecognized-publisher warning because this release is not code-signed yet. Confirm the file came from the official GitHub release before continuing.</p><div class="hero-actions"><a class="button" href="https://github.com/AES256Afro/Keel/releases/latest/download/Keel.Setup.1.2.3.exe">Download Windows setup</a><a class="button button-secondary" href="#windows">See every step</a></div></div>
             <div class="install-meta"><div><strong>Data location</strong><span>Your Windows user profile under Keel's application data folder.</span></div><div><strong>Expected result</strong><span>A Keel window opens and the local server remains available for scheduled backups.</span></div><div><strong>Alternative</strong><span>Use the PowerShell installer below to run Keel as an always-on service.</span></div></div>
           </div>
         </div>
@@ -62,7 +62,7 @@
 
         <div class="install-panel" data-install-panel="linux" hidden>
           <div class="install-panel-grid">
-            <div><p class="eyebrow">Linux desktop</p><h2>Pick AppImage, Debian package, or service.</h2><p>The AppImage is portable. The Debian package integrates with Debian and Ubuntu. The shell route is best for a server that should start automatically.</p><div class="hero-actions"><a class="button" href="https://github.com/AES256Afro/Keel/releases/latest/download/Keel-1.2.2.AppImage">Download AppImage</a><a class="button button-secondary" href="https://github.com/AES256Afro/Keel/releases/latest/download/keel_1.2.2_amd64.deb">Download .deb</a></div></div>
+            <div><p class="eyebrow">Linux desktop</p><h2>Pick AppImage, Debian package, or service.</h2><p>The AppImage is portable. The Debian package integrates with Debian and Ubuntu. The shell route is best for a server that should start automatically.</p><div class="hero-actions"><a class="button" href="https://github.com/AES256Afro/Keel/releases/latest/download/Keel-1.2.3.AppImage">Download AppImage</a><a class="button button-secondary" href="https://github.com/AES256Afro/Keel/releases/latest/download/keel_1.2.3_amd64.deb">Download .deb</a></div></div>
             <div class="install-meta"><div><strong>Desktop architectures</strong><span>The published AppImage and Debian package target x86-64.</span></div><div><strong>Server architectures</strong><span>Build from source on other Node.js 20 compatible Linux systems.</span></div><div><strong>Expected result</strong><span>The app opens locally. A service install also starts after login or boot, depending on your setup.</span></div></div>
           </div>
         </div>
@@ -107,7 +107,7 @@ docker compose up -d --build</code></pre><button class="copy-button" type="butto
             <h2>Windows</h2>
             <h3>Desktop setup</h3>
             <ol class="step-list">
-              <li>Download <a href="https://github.com/AES256Afro/Keel/releases/latest/download/Keel.Setup.1.2.2.exe">Keel Setup 1.2.2.exe</a> from the official release.</li>
+              <li>Download <a href="https://github.com/AES256Afro/Keel/releases/latest/download/Keel.Setup.1.2.3.exe">Keel Setup 1.2.3.exe</a> from the official release.</li>
               <li>If SmartScreen appears, check that the file name and GitHub origin are correct, select <strong>More info</strong>, then <strong>Run anyway</strong>. Stop if the source is not the official release.</li>
               <li>Complete setup and open Keel. The first start can take longer while the local database is created.</li>
               <li>Register the owner account, finish the welcome tour, then create and download a test backup from Settings.</li>
@@ -120,11 +120,11 @@ docker compose up -d --build</code></pre><button class="copy-button" type="butto
           <section id="desktop">
             <h2>Linux desktop</h2>
             <h3>AppImage</h3>
-            <div class="code-wrap"><pre id="appimage-command"><code>chmod +x Keel-1.2.2.AppImage
-./Keel-1.2.2.AppImage</code></pre><button class="copy-button" type="button" data-copy="#appimage-command">Copy</button></div>
+            <div class="code-wrap"><pre id="appimage-command"><code>chmod +x Keel-1.2.3.AppImage
+./Keel-1.2.3.AppImage</code></pre><button class="copy-button" type="button" data-copy="#appimage-command">Copy</button></div>
             <p>If the system reports that FUSE is missing, install the FUSE compatibility package for your distribution or use the Debian package instead.</p>
             <h3>Debian or Ubuntu</h3>
-            <div class="code-wrap"><pre id="deb-command"><code>sudo apt install ./keel_1.2.2_amd64.deb</code></pre><button class="copy-button" type="button" data-copy="#deb-command">Copy</button></div>
+            <div class="code-wrap"><pre id="deb-command"><code>sudo apt install ./keel_1.2.3_amd64.deb</code></pre><button class="copy-button" type="button" data-copy="#deb-command">Copy</button></div>
             <p>Launch Keel from the application menu. Both packages target x86-64 Linux.</p>
           </section>
 
@@ -201,7 +201,7 @@ docker compose up -d --build</code></pre><button class="copy-button" type="butto
             <h2>Troubleshooting</h2>
             <h3>The page does not open</h3><p>Confirm Keel is running, then try <code>http://127.0.0.1:3000</code>. For Docker, inspect <code>docker compose ps</code> and <code>docker compose logs --tail=100</code>. For a service install, use the exact status and log commands printed by the installer.</p>
             <h3>Another program uses port 3000</h3><p>Choose another port during install, for example <code>--port 8080</code>, or set the deployment's <code>PORT</code> value. Then open that port in the browser.</p>
-            <h3>The administrator email cannot register after a 1.2.1 CLI install</h3><p>Re-run the current guided installer. Keel 1.2.2 recognizes the exact affected empty local configuration, removes the accidental hard signup stop, and restarts a known managed service. If you started Keel manually, stop that process and start it again. Register normally, then generate the one-use claim command in Welcome or Settings.</p>
+            <h3>The administrator email cannot register after a 1.2.1 CLI install</h3><p>Re-run the current guided installer. Keel 1.2.2 and later recognize the exact affected empty local configuration, remove the accidental hard signup stop, and restart a known managed service. If you started Keel manually, stop that process and start it again. Register normally, then generate the one-use claim command in Welcome or Settings.</p>
             <h3>Settings says this server is unclaimed</h3><p>Open <strong>Claim this server</strong>, generate a command, and run it on the Keel machine within five minutes. The token is bound to the signed-in account, can be used once, and is replaced when you generate another. On macOS or Linux, enter the operating-system password only into the fresh sudo prompt in Terminal. On Windows, use an Administrator PowerShell. Never enter that password into the browser. Refresh Settings after the command succeeds.</p>
             <h3>Security keys do not register</h3><p>WebAuthn needs HTTPS or localhost. Confirm the browser URL exactly matches <code>KEEL_WEBAUTHN_ORIGIN</code> and that the relying-party ID is only the hostname.</p>
             <h3>A public server allows unexpected registration</h3><p>Stop the service, set <code>KEEL_ALLOWED_EMAILS</code> and <code>KEEL_DISABLE_SIGNUP=1</code>, restart, and review the audit log. Do this before sharing the URL.</p>
