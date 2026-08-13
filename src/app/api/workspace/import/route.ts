@@ -8,6 +8,7 @@ import { requireEditor, enforceLimit, handleApiError, ApiError } from "@/lib/api
 import { RestoreRefused, readBackupStream, restoreSnapshot } from "@/lib/backup";
 import { maxBackupUploadBytes } from "@/lib/limits";
 import { audit } from "@/lib/audit";
+import { requireSameOriginMutation } from "@/lib/same-origin";
 
 export const runtime = "nodejs";
 
@@ -188,6 +189,7 @@ async function spoolUpload(
 export async function POST(req: NextRequest) {
   let spool: string | null = null;
   try {
+    requireSameOriginMutation(req, "Imports must come from the Keel site.");
     const { user, workspace } = await requireEditor();
     // Streams an upload up to maxBackupUploadBytes() and writes thousands of rows.
     await enforceLimit("import", { limit: 5, windowMs: 10 * 60_000, userId: user.id });

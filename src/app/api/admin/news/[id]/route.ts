@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { audit } from "@/lib/audit";
+import { requireJsonRequest, requireSameOriginMutation } from "@/lib/same-origin";
 import { requireInstanceOwner, handleApiError } from "@/lib/api";
 import { uniqueNewsSlug } from "@/lib/site";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const ctx = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Change public news from Keel Admin");
+    requireJsonRequest(req, "Public-news requests must use application/json");
     const { id } = await params;
     const b = await req.json().catch(() => ({}));
     const existing = await prisma.newsPost.findUnique({ where: { id } });
@@ -35,9 +38,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const ctx = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Delete public news from Keel Admin");
     const { id } = await params;
     await prisma.newsPost.delete({ where: { id } });
     await audit("site.news.delete", ctx.user, { target: id });

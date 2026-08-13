@@ -1,11 +1,12 @@
 import { readFileSync } from "fs";
 import path from "path";
 import { prisma } from "@/lib/prisma";
-import { backupBackoff, runBackup, envBackupPassphrase } from "@/lib/backup";
+import { BackupInProgressError, backupBackoff, runBackup } from "@/lib/backup";
 import { runMaintenance } from "@/lib/maintenance";
 import { documentToPlainText } from "@/lib/plaintext";
 import { keelEnv } from "@/lib/env";
 import { ensureSchema } from "@/lib/schema-migrate";
+import { singleFlightBackupTick } from "@/lib/backup-single-flight";
 
 const CHECK_EVERY_MS = 5 * 60 * 1000;
 /** Retention runs far less often than the backup check - hourly is plenty. */
@@ -157,7 +158,7 @@ export async function initServer() {
     }
   }
 
-  const tick = async () => {
+  const tickWork = async () => {
     try {
       const workspaces = await prisma.workspace.findMany({
         where: { backupEnabled: true },
@@ -173,10 +174,13 @@ export async function initServer() {
         // and was retried on EVERY five-minute tick, forever.
         if (!backupBackoff.ready(ws.id)) continue;
         try {
-          const { file } = await runBackup(ws, envBackupPassphrase());
+          const { file } = await runBackup(ws);
           backupBackoff.clear(ws.id);
           console.log(`[keel] automatic backup written: ${file}`);
         } catch (err) {
+          // A manual run owns this workspace right now. That is neither a
+          // failed scheduled backup nor a reason to create retry backoff.
+          if (err instanceof BackupInProgressError) continue;
           console.error(`[keel] automatic backup failed for workspace ${ws.id}:`, err);
           // Surface the failure in Settings instead of only in the server log.
           const message = err instanceof Error ? err.message : String(err);
@@ -195,6 +199,7 @@ export async function initServer() {
       console.error("[keel] backup scheduler error", err);
     }
   };
+  const tick = () => singleFlightBackupTick(tickWork);
 
   const maintenance = async () => {
     const result = await runMaintenance();
@@ -203,19 +208,23 @@ export async function initServer() {
       result.notifications +
       result.visits +
       result.loginFailures +
-      result.auditEvents;
+      result.auditEvents +
+      result.googleLinkStates +
+      result.oauthConnectionStates;
     if (total > 0) {
       console.log(
         `[keel] retention sweep: ${result.sessions} expired sessions, ` +
           `${result.notifications} old notifications, ${result.visits} old visits, ` +
           `${result.loginFailures} stale login-failure records, ` +
-          `${result.auditEvents} expired audit events`
+          `${result.auditEvents} expired audit events, ` +
+          `${result.googleLinkStates} expired Google link states, ` +
+          `${result.oauthConnectionStates} expired OAuth connection states`
       );
     }
   };
 
-  setInterval(tick, CHECK_EVERY_MS);
-  setTimeout(tick, 15 * 1000); // first check shortly after boot
+  setInterval(() => void tick(), CHECK_EVERY_MS);
+  setTimeout(() => void tick(), 15 * 1000); // first check shortly after boot
 
   setInterval(() => void maintenance(), MAINTENANCE_EVERY_MS);
   setTimeout(() => void maintenance(), 60 * 1000);

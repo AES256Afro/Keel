@@ -23,25 +23,28 @@ model User {
   name         String
   // Null for accounts created via Google sign-in (no password login).
   passwordHash String?
-  googleId     String?
+  // Google's stable subject identifies exactly one Keel account. Email can
+  // change, so this must be a database invariant rather than an app-only check.
+  googleId     String?  @unique
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  sessions      Session[]
-  credentials   Credential[]
-  memberships   WorkspaceMember[]
-  ownedSpaces   Workspace[]       @relation("WorkspaceOwner")
-  createdPages  Page[]            @relation("PageCreatedBy")
-  editedPages   Page[]            @relation("PageEditedBy")
-  comments      Comment[]
-  notifications Notification[]
-  favorites     Favorite[]
-  visits        RecentVisit[]
-  attachments   Attachment[]
+  sessions           Session[]
+  credentials        Credential[]
+  memberships        WorkspaceMember[]
+  ownedSpaces        Workspace[]         @relation("WorkspaceOwner")
+  createdPages       Page[]              @relation("PageCreatedBy")
+  editedPages        Page[]              @relation("PageEditedBy")
+  comments           Comment[]
+  notifications      Notification[]
+  favorites          Favorite[]
+  visits             RecentVisit[]
+  attachments        Attachment[]
+  instanceClaimToken InstanceClaimToken?
 
   // Null until the first-run welcome has been seen (or skipped) - the only
   // state the onboarding flow keeps.
-  onboardedAt   DateTime?
+  onboardedAt DateTime?
 }
 
 // A registered WebAuthn/FIDO2 authenticator (e.g. a YubiKey) used as a second
@@ -96,6 +99,22 @@ model AppSetting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+// A browser-authenticated, short-lived bridge from an ordinary account to the
+// machine-local claim command. Only the SHA-256 digest is stored. Regenerating
+// replaces the user's prior token, and consuming it deletes every outstanding
+// token while atomically writing the immutable instance owner.
+model InstanceClaimToken {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
 }
 
 // ---- Optional built-in public site ------------------------------------------
@@ -172,14 +191,14 @@ model Workspace {
   oneNoteLastSyncAt   DateTime?
   oneNoteLastError    String?
 
-  owner     User              @relation("WorkspaceOwner", fields: [ownerId], references: [id])
-  members   WorkspaceMember[]
-  invites   WorkspaceInvite[]
+  owner       User              @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  members     WorkspaceMember[]
+  invites     WorkspaceInvite[]
   attachments Attachment[]
-  pages     Page[]
-  databases Database[]
-  pageLinks PageLink[]
-  pageTags  PageTag[]
+  pages       Page[]
+  databases   Database[]
+  pageLinks   PageLink[]
+  pageTags    PageTag[]
 }
 
 // Invitation for someone who hasn't registered yet; converted to a
@@ -210,46 +229,47 @@ model WorkspaceMember {
 }
 
 model Page {
-  id           String    @id @default(cuid())
-  workspaceId  String
-  parentPageId String?
-  type         String    @default("document") // document | database | record
-  title        String    @default("")
-  icon         String?
+  id                String    @id @default(cuid())
+  workspaceId       String
+  parentPageId      String?
+  type              String    @default("document") // document | database | record
+  title             String    @default("")
+  icon              String?
   // TipTap document JSON, serialized. Blocks live inside this document.
-  content      String?
+  content           String?
   // The document flattened to visible text, maintained on every save.
   //
   // Search used to LIKE over `content`, which is the serialized editor document
   // - so every page matched "paragraph" and "doc", and a word split across two
   // marks never matched at all. This is what search actually reads.
-  plainText    String?
-  sortOrder    Float     @default(0)
-  createdById  String
-  editedById   String?
-  archivedAt   DateTime? // non-null = in trash
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  plainText         String?
+  sortOrder         Float     @default(0)
+  createdById       String
+  editedById        String?
+  archivedAt        DateTime? // non-null = in trash
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
   externalSource    String?
   externalId        String?
   externalUpdatedAt DateTime?
   externalHash      String?
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  parent    Page?           @relation("PageTree", fields: [parentPageId], references: [id], onDelete: SetNull)
-  children  Page[]          @relation("PageTree")
-  createdBy User            @relation("PageCreatedBy", fields: [createdById], references: [id])
-  editedBy  User?           @relation("PageEditedBy", fields: [editedById], references: [id])
-  database  Database?       @relation("DatabasePage")
-  record    DatabaseRecord? @relation("RecordPage")
-  comments  Comment[]
-  favorites Favorite[]
-  visits    RecentVisit[]
-  linksOut  PageLink[]      @relation("LinkSource")
-  linksIn   PageLink[]      @relation("LinkTarget")
-  tags      PageTag[]
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent      Page?           @relation("PageTree", fields: [parentPageId], references: [id], onDelete: SetNull)
+  children    Page[]          @relation("PageTree")
+  createdBy   User            @relation("PageCreatedBy", fields: [createdById], references: [id])
+  editedBy    User?           @relation("PageEditedBy", fields: [editedById], references: [id])
+  database    Database?       @relation("DatabasePage")
+  record      DatabaseRecord? @relation("RecordPage")
+  comments    Comment[]
+  favorites   Favorite[]
+  visits      RecentVisit[]
+  linksOut    PageLink[]      @relation("LinkSource")
+  linksIn     PageLink[]      @relation("LinkTarget")
+  tags        PageTag[]
   attachments Attachment[]
 
+  @@unique([workspaceId, externalSource, externalId])
   @@index([workspaceId, parentPageId])
   // Link resolution looks pages up by title on every autosave that has a
   // [[wikilink]] - without this it scans every live page in the workspace.
@@ -259,7 +279,6 @@ model Page {
   @@index([workspaceId, updatedAt])
   // Search also excludes archived pages - this covers the whole predicate.
   @@index([workspaceId, archivedAt, updatedAt])
-  @@unique([workspaceId, externalSource, externalId])
 }
 
 model Database {

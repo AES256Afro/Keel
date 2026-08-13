@@ -33,12 +33,49 @@ several devices.
 | **Docker** | A home server, NAS, or VPS | `docker compose up -d --build` |
 | **From source** | Development and review | `npm ci && npm run dev` |
 
-Open `http://localhost:3000`. The first account becomes the instance owner. The
-welcome tour explains where data lives and how to choose a backup. The in-app
-Setup page walks through optional services with exact provider links and steps.
+Open `http://localhost:3000`. Registration is open by default and stays open
+until the server owner changes it. On server, source, and Docker installs,
+register an account, open **Claim this server** in Welcome or Settings, and
+generate a one-use command bound to that account. Run it on the Keel machine
+within five minutes. macOS and Linux require fresh sudo authorization; Windows
+requires Administrator PowerShell. The browser never asks for an
+operating-system password. The loopback-only desktop package assigns these
+controls to its first local workspace owner automatically, so it does not show
+a terminal claim step. On a public host, bootstrap privately and enable the
+hard signup stop before exposure. The welcome tour explains where data lives
+and how to choose a backup.
 
 For prerequisites, expected results, updates, and troubleshooting, use the
 [guided install page](https://keelnotes.com/install/) or [docs/INSTALL.md](docs/INSTALL.md).
+
+The supported Compose files require Docker Compose 2.30 or newer so env files
+can be read in raw mode. This keeps dollar signs in passwords and tokens
+literal. The local stack publishes only `127.0.0.1:3000`; use
+`KEEL_HOST_PORT` to change the host-side port. After registering in Docker,
+generate a one-use token and run the exact command shown in Keel, for example:
+
+```bash
+docker compose exec --user root -e KEEL_CONTAINER_CLAIM=1 keel npm run claim -- 'one-use-token'
+```
+
+On Docker Desktop, use that command from a terminal with daemon access. On a
+Linux Docker host, first run `sudo -k`, then prefix the Docker command with
+`sudo`. Docker daemon control is the machine-authorization boundary; the normal
+Keel process continues to run as the unprivileged `node` user.
+
+After claiming a server, its owner can add Google sign-in, Google Drive,
+OneDrive, and OneNote from **Settings -> Integrations**. The page supplies the
+exact callback URLs. Client secrets are write-only, changes apply immediately,
+and Keel encrypts saved values with a host key kept outside the database. Saved
+credentials remain labeled unverified until a real provider flow succeeds.
+Environment credentials remain available as locked deployment overrides.
+
+The instance owner can also edit the optional public site's name, tagline, and
+Notes link, and save the scheduled-backup passphrase as a write-only managed
+secret. Environment values remain per-field locked overrides. A read-only
+effective-configuration summary reports the database dialect and network,
+proxy, WebAuthn, access, and storage posture while omitting secret values,
+database URLs, and absolute host paths.
 
 ## What Keel includes
 
@@ -61,25 +98,41 @@ policy, and documented Tailscale, reverse-proxy, and Cloudflare Tunnel paths.
 
 ## The `keel` CLI
 
-The release tarball and shell installer provide:
+The platform-specific release tarball provides:
 
 ```text
 keel start | stop | status | logs     run the server (data in ~/.keel)
-keel export notebook.db               copy the complete SQLite workspace
-keel import notebook.db               restore it on another machine
+keel export notebook.db               copy SQLite data and its managed-secret companion
+keel import notebook.db               restore that bundle on another machine
 keel to-docker                        create a Docker deployment from this install
 keel update                           update the app without replacing data
 keel paths                            show application and data locations
+keel claim <one-use-token>             claim instance-owner controls from the server terminal
 ```
+
+Generate the one-use token from **Claim this server** while signed in. From a
+source checkout, run the exact `npm run claim -- <one-use-token>` command shown
+there. The token expires after five minutes and can be used once. Claiming does
+not close registration; the owner controls registration separately in Settings.
 
 ## Moving an install
 
-SQLite deployments keep the workspace in one database file, so moving between
-install methods is deliberately uneventful:
+SQLite deployments keep notebook data in one database file. If Settings has
+created any managed OAuth credential, scheduled-backup secret, or cloud
+connection, `keel export notebook.db` also writes the mode-`0600` sibling
+`notebook.db.keel-server-secrets.key`. Keep those two files together. The key is
+never printed.
 
-- Laptop to laptop: `keel export`, copy the file, then `keel import`.
-- Laptop to Docker: `keel to-docker`, then `docker compose up -d`.
-- Docker to another host: stop Keel, copy `keel.db` from the volume, and import.
+- Laptop to laptop: `keel export`, copy the database and any key companion, then
+  `keel import`. Import preserves the outgoing key beside its pre-import database
+  backup and refuses to overwrite an unrelated environment-managed key.
+- Laptop to Docker: `keel to-docker`, then `docker compose up -d`. The generated
+  stack keeps `./data` as a private one-time import seed and runs Keel from a
+  Docker-owned named volume. Re-running `keel to-docker` never replaces an
+  initialized volume.
+- Docker to another host: stop Keel, copy `keel.db` and
+  `.keel-server-secrets.key` from the volume, and import them from the same
+  directory.
 - Any method: download and restore a snapshot from Settings. Set a passphrase
   before export when the backup needs application-level encryption.
 
@@ -91,10 +144,13 @@ SQLite file directly.
 ```bash
 npm ci
 npm run dev          # http://localhost:3000
-npm test             # typecheck, lint, and application checks
 npm run build        # production build
+npm test             # typecheck, lint, and 35 application suites
 npm run site:check   # validate the static keelnotes.com site
 ```
+
+Ten suites inside `npm test` launch the production server against isolated test
+databases, so build before running the complete command.
 
 Operational documentation:
 
@@ -107,7 +163,7 @@ Operational documentation:
 
 ## License
 
-Keel 1.2.1 is source-available under the [Business Source License 1.1](LICENSE).
+Keel 1.2.2 is source-available under the [Business Source License 1.1](LICENSE).
 Personal self-hosting and internal organizational use are allowed. Offering a
 third-party hosted or managed Keel service requires a commercial license. This
 version changes to Apache 2.0 on August 13, 2030. See [LICENSING.md](LICENSING.md)

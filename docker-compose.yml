@@ -2,14 +2,32 @@ services:
   keel:
     build: .
     container_name: keel
+    # Pass application settings through without Compose expanding `$` in
+    # passwords or tokens. This file is required so a missing setup step fails
+    # visibly instead of starting against an unexpected access policy.
+    env_file:
+      - path: ${KEEL_APP_ENV_FILE:-.env}
+        required: true
+        format: raw
     ports:
-      - "3000:3000"
+      # Local by default. Tailscale Serve and SSH forwarding can still reach
+      # this socket, while another device on the LAN cannot bypass Keel's
+      # intended ingress path by connecting directly to port 3000.
+      - "127.0.0.1:${KEEL_HOST_PORT:-3000}:3000"
     # Comes back automatically after crashes and host reboots
     # (as long as Docker itself starts on boot).
     restart: unless-stopped
     environment:
-      # Passphrase for automatic encrypted backups (optional).
-      - KEEL_BACKUP_PASSPHRASE=${KEEL_BACKUP_PASSPHRASE:-}
+      # Container invariants override similarly named values in .env. All
+      # other application settings, including access and OAuth settings, pass
+      # through from .env unchanged.
+      DATABASE_URL: file:/data/keel.db
+      PORT: "3000"
+      HOST: 0.0.0.0
+      HOSTNAME: 0.0.0.0
+      KEEL_BACKUP_DIR: /data/backups
+      NOPIN_UPLOAD_DIR: /data/uploads
+      KEEL_CLAIM_REQUIRED: "1"
     volumes:
       # Everything the image writes lives under /data - the Dockerfile sets
       # DATABASE_URL=file:/data/keel.db, KEEL_BACKUP_DIR=/data/backups and
@@ -27,4 +45,7 @@ services:
       # recreating the container, then copy its contents into keel-data.
 
 volumes:
+  # Compose scopes this logical name to the project (normally
+  # <project>_keel-data). Keep using `docker compose` to inspect or move it;
+  # changing the project name deliberately selects a different volume.
   keel-data:

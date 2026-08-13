@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireOwner, handleApiError, ApiError } from "@/lib/api";
 import { azureTestConnection } from "@/lib/cloud";
 import { audit } from "@/lib/audit";
+import { sealWorkspaceCredential } from "@/lib/workspace-secrets";
 
 /**
  * Connect Azure Blob Storage as the backup target (owner-only).
@@ -33,7 +34,7 @@ export async function POST(req: NextRequest) {
       where: { id: workspace.id },
       data: {
         cloudProvider: "azure",
-        cloudRefreshToken: sasUrl,
+        cloudRefreshToken: sealWorkspaceCredential(workspace.id, "azure", sasUrl),
         cloudEmail: `Azure: ${account}/${container}`,
         cloudFolderId: null,
       },

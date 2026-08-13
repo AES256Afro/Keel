@@ -1,8 +1,8 @@
 # Known issues
 
-Everything here is real, reproduced, and currently unfixed. Written after the
-round-14 sweep. Anything a sweep found and fixed is not listed - see the git
-log, where each round's commit describes what it closed.
+Everything here is real, reproduced, and currently unfixed. Maintained through
+the 1.2.2 release sweep. Anything a sweep found and fixed is not listed - see
+the git log and [CHANGELOG-HARDENING.md](CHANGELOG-HARDENING.md) for what closed.
 
 Nothing here loses data. That is a deliberate bar: data-loss defects were
 fixed rather than recorded, and if one ever lands in this file it should be at
@@ -27,18 +27,22 @@ unavailable cannot stop a server through the CLI.
 
 These are not app bugs, but they cost real time to rediscover.
 
-### Four suites need a browser; three more need a build
+### Browser and production-build requirements
 
-`npm test` runs the 20 suites that need neither. The rest are deliberately
-separate:
+The package exposes 44 named `test:*` commands. `npm test` directly invokes 35
+of them, plus typecheck and lint. Run a production build first: ten included
+suites launch `next start` against isolated databases.
 
 | Suite | Needs |
 |---|---|
-| `test:editor`, `test:graph-browser`, `test:split-browser` | a Chromium (auto-detected) |
-| `test:e2e` | a server you started yourself: `npm run build && npm start` |
-| `test:authz`, `test:perf`, `test:perf-scale` | `npm run build` first |
+| `npm test` | `npm run build` first |
+| `test:browser` (`test:editor`, `test:graph-browser`, `test:split-browser`) | a current build and Chromium (auto-detected) |
+| `test:e2e` | Chromium and a server you started yourself with `npm run build && npm start` |
+| `test:authz`, `test:perf`, `test:perf-scale` | a current build; each script starts its own isolated server |
 
-Run the browser three together with `npm run test:browser`.
+The OAuth, operator-settings, and mobile `*-ui` checks inside `npm test` are
+static interface contracts and do not launch a browser. The release pass still
+performs rendered browser checks separately.
 
 ### Chromium is auto-detected, not pinned
 

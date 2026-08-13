@@ -1,8 +1,8 @@
 # What shipped
 
-Everything below is on the `hardening` branch, verified by `npm test`
-(268 automated checks) plus manual browser testing. Grouped by what it changes
-for you.
+Everything below is part of the current release and is verified by the
+repository's automated suites plus rendered browser testing. Grouped by what it
+changes for you.
 
 ---
 
@@ -17,14 +17,28 @@ allowlist and the Cloudflare tunnel controls to any account on the instance.
 Reproduced end to end: a view-only invitee rewrote the allowlist to contain only
 their own address, locking the real owner out permanently.
 
-Instance ownership is now its own concept (`src/lib/instance.ts`): the address in
-`KEEL_OWNER_EMAIL`, or whoever registered first. `requireInstanceOwner()` gates
+Instance ownership is now its own concept (`src/lib/instance.ts`). Local server
+installs bind a signed-in account to an immutable user ID only after the machine
+operator generates a five-minute, one-use claim command and confirms through
+fresh sudo or Windows Administrator authorization. Registration by itself never
+grants server administration. `KEEL_OWNER_USER_ID` is the stable operator
+override. Hosted PostgreSQL can use a 32-byte bootstrap token through the
+write-only claim form and remove it after use. Legacy `KEEL_OWNER_EMAIL` binds
+only a matching Google-verified identity, never a password-only account.
+`requireInstanceOwner()` gates
 `/api/admin/**`, `/api/instance/**` and `/admin`; `requireOwner()` keeps its
 narrower, correct meaning for workspace settings.
 
-**Action for you:** set `KEEL_OWNER_EMAIL` in production. Without it the fallback
-is "first to register", which is right for a personal box but not something to
-rely on after a database restore.
+**Action for you:** on a local server, use **Claim this server** in Welcome or
+Settings. On a public deployment, create and claim the administrator through a
+private bootstrap path, then restore the allowlist and hard signup stop before
+exposure.
+
+The claimed owner can now manage Google and Microsoft OAuth applications,
+public-site branding, and the scheduled-backup passphrase in Settings. Secrets
+are write-only and encrypted with a host key kept outside the database;
+environment values remain locked operator overrides. The same host-key boundary
+now protects workspace refresh tokens, Azure SAS URLs, and R2 credentials.
 
 ### Everything else
 
@@ -41,6 +55,8 @@ rely on after a database restore.
 | Page content accepted unbounded | 2 MB per page, 512 chars per title, 64 KB per cell, all returning 413 |
 | A failed security-key attempt left a 5-minute window of unlimited retries | The pending record burns on first failure |
 | OAuth errors reflected raw exception text into the URL | Development only; production logs server-side |
+| Drive and OneNote OAuth state lived only in one browser cookie and could follow a changed session or active workspace | Hashed, short-lived, one-use server state is bound to the exact session, user, workspace, provider, and purpose; callbacks fail if any binding changed |
+| Workspace refresh tokens, Azure SAS URLs, and R2 keys were plaintext database fields | AES-256-GCM envelopes bound to workspace and provider, with the key outside the database; legacy rows encrypt atomically before use and rotations remain encrypted |
 | `POST /api/pages` never validated `parentPageId` against the workspace | It does now |
 
 ### Account lifecycle and the audit trail
@@ -82,9 +98,9 @@ three files mid-session.
   subdomain. One XSS or one stale DNS record anywhere under that apex takes the
   notebook with it. Removing it breaks the seamless "My Notes" link, so it's your
   call - the alternative is a short-lived handoff token.
-- **bcrypt cost 10.** Fine, but 12+ is the current recommendation.
 - **Viewers can still export the whole workspace.** Consistent with read access,
-  but probably not what "View only" implies to the person granting it.
+  but probably not what "View only" implies to the person granting it. The
+  export is rate-limited and audited, but the permission remains deliberate.
 
 ---
 
@@ -170,13 +186,13 @@ that wrote `PORT=8080` served on 3000 anyway. `npm start` now goes through
 
 ### Cloudflare, honestly
 
-Keel does not run on Workers today. It's a Node server: `fs` for backups,
-`child_process` for the tunnel manager, `scryptSync` for encryption, and
-in-process state for pending 2FA and rate limits. Getting there means moving
-backups to the R2 API, moving in-memory state to the database, switching to
-Hyperdrive or D1, and adopting OpenNext. That's real work, and pretending
-otherwise would waste your time. Cloudflare Tunnel and R2 - which you already
-use - work now.
+Keel does not run on Workers today. It's a Node server: local filesystem paths
+for snapshots, `child_process` for the tunnel manager, Prisma's native database
+client, and process-local state for pending 2FA and tunnel management. Backup
+key derivation uses asynchronous Node `crypto.scrypt`; it is not a Workers API.
+A Workers port would need object-native storage, durable shared state, a
+Workers-compatible database path, and a supported Next adapter such as OpenNext.
+Cloudflare Tunnel and R2 work with the Node deployment now.
 
 ---
 
@@ -259,31 +275,48 @@ The failure path is tested by intercepting saves and asserting the UI says so -
 the old behaviour passes every test that only checks the happy path, which is
 why it survived.
 
-## 9. Tests and CI
+## 9. Responsive workspace shell
+
+The workspace is now usable at a 390-pixel phone viewport without a native app.
+The desktop sidebar becomes a full-height drawer with named open and close
+controls, Escape handling, keyboard focus containment and restoration, backdrop
+dismissal, body-scroll locking, and full-width content below a fixed mobile
+header. Closing the drawer never changes the desktop sidebar layout.
+
+The static contract is covered by `test:mobile-ui`, and the release pass also
+checks the rendered behavior at a phone viewport.
+
+## 10. Tests and CI
 
 There was no CI, no test runner, and `npm run lint` was broken (no ESLint config,
-no dependency). Now:
+no dependency). The package now exposes 44 named `test:*` commands. The main
+command runs typecheck, lint, and 35 application suites against the current
+production build:
 
 ```bash
-npm test   # typecheck → lint → 268 checks
+npm run build && npm test
 ```
 
 | Suite | Covers |
 | --- | --- |
-| `test:mindmap` (35) | Layout, folding, pinned positions, cycles, orphans, tree helpers |
-| `test:authz` (62) | Every route × {instance owner, workspace owner, editor, viewer, other workspace, anonymous} |
-| `test:backup` (25) | Backup → list → restore round trip, encryption, path traversal |
-| `test:auth` (38) | Headers, CSP nonce rotation, desktop gating, enumeration, rate limits, size caps, password change, session revocation |
-| `test:search` (45) | Flattening, operators, ranking, snippets, backfill, and the `paragraph`-matches-everything regression |
-| `test:integrity` (10) | Files hidden from git, orphaned endpoints, migration coverage, route guards, tracked secrets |
-| `test:links` (36) | Wikilink and tag extraction, backlinks, forward-link resolution, rename behaviour, workspace isolation |
-| `test:editor` (17) | The `[[` picker, the slash menu, autosave failure reporting, CSP violations - in a real browser |
+| `test:mindmap` | Layout, folding, pinned positions, cycles, orphans, and tree helpers |
+| `test:authz` | Every route across instance owner, workspace roles, other workspaces, and anonymous callers |
+| `test:backup` | Backup, list, restore, encryption, streaming attachments, and path confinement |
+| `test:auth` | Headers, CSP nonce rotation, desktop gating, enumeration, rate limits, size caps, password change, and session revocation |
+| `test:claim`, `test:access`, `test:signup`, `test:tunnel-security` | Machine-confirmed ownership, default-open registration, environment locks, atomic provisioning, and tunnel command boundaries |
+| `test:oauth-settings`, `test:google-link`, `test:oauth-state` | Encrypted GUI credentials, explicit account linking, and session-bound one-use OAuth state |
+| `test:workspace-secrets` | Encrypted cloud credentials, legacy conversion, provider binding, and safe rotation |
+| `test:search` | Flattening, operators, ranking, snippets, backfill, and the `paragraph`-matches-everything regression |
+| `test:integrity`, `test:artifact-safety` | Files hidden from git, orphaned endpoints, migration coverage, route guards, tracked secrets, and clean release bundles |
+| `test:links` | Wikilink and tag extraction, backlinks, forward-link resolution, rename behaviour, and workspace isolation |
+| `test:editor` | The `[[` picker, slash menu, autosave failure reporting, and CSP violations in a real browser |
 | `test:perf` | Upper bounds on the five paths that were quadratic or N+1 |
 
-CI additionally builds both container images, boots one and probes it, proves the
-dialect-mismatch guard fires, and runs the installer inside a clean Debian
-container. The authorization matrix is the specific thing that would have caught
-P0-1 - it now runs on every push.
+CI additionally builds the SQLite, PostgreSQL, and hardened production images;
+boots and probes the SQLite and production variants; proves the dialect-mismatch
+guard fires; exercises PostgreSQL migrations and authorization; and runs the
+installer inside a clean Debian container. The authorization matrix is the
+specific thing that would have caught P0-1 - it now runs on every push.
 
 Also fixed while linting: three genuine React correctness issues (a ref mutated
 during render in `useDebounced`, and effect-driven state sync in `SearchDialog`,
@@ -297,15 +330,13 @@ mount - one less flash, one less hydration risk.
 
 Honestly listed, because they are the next things that will bite:
 
-- **Attachments.** No images, no files. Blocks gallery views and cover images,
-  and it is the most-felt gap against all three reference products.
 - **Server-side database filter/sort/pagination.** Board and table views still
   load and filter every record client-side. The record page no longer does, but
   the views themselves do.
 - **Autosave still sends the whole document** every 700 ms of typing. It now
   reports failure honestly, but sending ProseMirror steps instead is the real
   fix - and the groundwork for page history and collaborative editing.
-- **Daily notes and a graph view** - the rest of the Obsidian cluster.
 - **The cross-subdomain session cookie**, unchanged pending your decision.
 
-These are the M2 items in [ROADMAP.md](ROADMAP.md).
+The product work is tracked in [ROADMAP.md](ROADMAP.md); the security tradeoff
+is retained in [AUDIT.md](AUDIT.md).

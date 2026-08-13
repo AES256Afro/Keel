@@ -2,11 +2,14 @@
 // VPS uses Caddy instead). Runs `cloudflared` as a child of the Node server:
 //   • quick tunnel  → cloudflared tunnel --url http://localhost:<port>
 //                     yields an instant https://<random>.trycloudflare.com URL
-//   • named tunnel  → cloudflared tunnel run --token <token>
+//   • named tunnel  → cloudflared tunnel run --token-file <private-file>
 //                     serves your own hostname (configured in Cloudflare)
 //
 // Node-only (child_process); route handlers run in the Node runtime.
 import { spawn, spawnSync, type ChildProcess } from "child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 export interface TunnelState {
   running: boolean;
@@ -17,12 +20,31 @@ export interface TunnelState {
 }
 
 const g = globalThis as unknown as {
-  __keelTunnel?: { proc: ChildProcess | null; state: TunnelState };
+  __keelTunnel?: {
+    proc: ChildProcess | null;
+    state: TunnelState;
+    cleanupSecret: (() => void) | null;
+  };
 };
 const store = (g.__keelTunnel ??= {
   proc: null,
   state: { running: false, mode: null, url: null, error: null, startedAt: null },
+  cleanupSecret: null,
 });
+
+/** Keep a named-tunnel token out of argv, where process inspection exposes it. */
+export function prepareNamedTunnelLaunch(token: string): {
+  args: string[];
+  tokenFile: string;
+  cleanup: () => void;
+} {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "keel-tunnel-"));
+  fs.chmodSync(dir, 0o700);
+  const tokenFile = path.join(dir, "token");
+  fs.writeFileSync(tokenFile, token, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  const cleanup = () => fs.rmSync(dir, { recursive: true, force: true });
+  return { args: ["tunnel", "run", "--token-file", tokenFile], tokenFile, cleanup };
+}
 
 export function cloudflaredAvailable(): boolean {
   try {
@@ -40,15 +62,22 @@ export function tunnelState(): TunnelState {
 export function startTunnel(opts: { mode: "quick" | "named"; token?: string; port: number }) {
   if (store.proc) return tunnelState(); // already running
 
-  const args =
+  const named =
     opts.mode === "named" && opts.token
-      ? ["tunnel", "run", "--token", opts.token]
-      : ["tunnel", "--no-autoupdate", "--url", `http://localhost:${opts.port}`];
+      ? prepareNamedTunnelLaunch(opts.token)
+      : null;
+  const args = named?.args ?? [
+    "tunnel",
+    "--no-autoupdate",
+    "--url",
+    `http://localhost:${opts.port}`,
+  ];
 
   let proc: ChildProcess;
   try {
     proc = spawn("cloudflared", args, { stdio: ["ignore", "pipe", "pipe"] });
   } catch (e) {
+    named?.cleanup();
     store.state = {
       running: false,
       mode: null,
@@ -60,6 +89,7 @@ export function startTunnel(opts: { mode: "quick" | "named"; token?: string; por
   }
 
   store.proc = proc;
+  store.cleanupSecret = named?.cleanup ?? null;
   store.state = { running: true, mode: opts.mode, url: null, error: null, startedAt: Date.now() };
 
   const scan = (buf: Buffer) => {
@@ -69,11 +99,15 @@ export function startTunnel(opts: { mode: "quick" | "named"; token?: string; por
   proc.stdout?.on("data", scan);
   proc.stderr?.on("data", scan);
   proc.on("exit", (code) => {
+    store.cleanupSecret?.();
+    store.cleanupSecret = null;
     store.proc = null;
     store.state.running = false;
     if (code) store.state.error = `cloudflared exited (code ${code})`;
   });
   proc.on("error", (err) => {
+    store.cleanupSecret?.();
+    store.cleanupSecret = null;
     store.proc = null;
     store.state.running = false;
     store.state.error =
@@ -90,6 +124,8 @@ export function stopTunnel() {
     store.proc.kill();
     store.proc = null;
   }
+  store.cleanupSecret?.();
+  store.cleanupSecret = null;
   store.state = { running: false, mode: null, url: null, error: null, startedAt: null };
   return tunnelState();
 }

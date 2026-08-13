@@ -28,6 +28,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -58,6 +60,42 @@ jobs:
 
       - name: Auth hardening (headers, rate limits, size caps)
         run: npm run test:auth
+
+      - name: Registration and access policy
+        run: npm run test:access
+
+      - name: Machine-confirmed instance claim
+        run: npm run test:claim
+
+      - name: Legacy installer recovery policy
+        run: npm run test:installer-recovery
+
+      - name: Atomic account provisioning
+        run: npm run test:signup
+
+      - name: Encrypted owner-managed OAuth settings
+        run: npm run test:oauth-settings
+
+      - name: OAuth settings browser boundary
+        run: npm run test:oauth-ui
+
+      - name: Owner-managed operator settings
+        run: npm run test:operator-settings
+
+      - name: Operator settings browser boundary
+        run: npm run test:operator-ui
+
+      - name: Encrypted workspace cloud credentials
+        run: npm run test:workspace-secrets
+
+      - name: Explicit Google account linking
+        run: npm run test:google-link
+
+      - name: Cloud OAuth state binding
+        run: npm run test:oauth-state
+
+      - name: Responsive workspace shell contract
+        run: npm run test:mobile-ui
 
   # Keel ships two database dialects. SQLite is covered by the job above (every
   # test script uses it); this proves the PostgreSQL path - the one Azure and
@@ -108,11 +146,17 @@ jobs:
       - name: Backup round-trip on PostgreSQL
         run: npm run test:backup
 
+      - name: Atomic account provisioning on PostgreSQL
+        run: npm run test:signup
+
+      - name: Encrypted workspace cloud credentials on PostgreSQL
+        run: npm run test:workspace-secrets
+
   # The installers and the container image are the paths most likely to rot
   # unnoticed, because nobody exercises them while developing.
   packaging:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -132,6 +176,16 @@ jobs:
           Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
           $r = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Error
           if ($r) { $r | Format-Table; exit 1 }
+          ./scripts/windows-installer-acl-check.ps1
+
+      - name: Compose deployment isolation
+        run: npm run test:compose
+
+      - name: Managed-secret key portability
+        run: npm run test:cli-portability
+
+      - name: Release artifact secret scrubbing
+        run: npm run test:artifact-safety
 
       # Both build args, because the Prisma client is generated per dialect and
       # a broken Postgres image would only surface on a managed host.
@@ -153,7 +207,7 @@ jobs:
             --read-only --tmpfs /tmp:rw,noexec,nosuid,size=67108864 \
             --cap-drop ALL --security-opt no-new-privileges \
             -v keel-production-smoke-data:/data \
-            -e KEEL_OWNER_EMAIL=ci@example.test keel:production
+            -e KEEL_OWNER_USER_ID=ci-owner-id keel:production
           test "$(docker inspect keel-production-smoke --format '{{.Config.User}}')" = node
           for i in $(seq 1 60); do
             if curl -fsS http://localhost:3001/api/health | grep -q '"ok":true'; then
@@ -171,7 +225,7 @@ jobs:
       - name: The image actually serves
         run: |
           docker run -d --name keel-smoke -p 3000:3000 \
-            -e KEEL_OWNER_EMAIL=ci@example.test keel:sqlite
+            -e KEEL_OWNER_USER_ID=ci-owner-id keel:sqlite
           for i in $(seq 1 60); do
             if curl -fsS http://localhost:3000/api/health | grep -q '"ok":true'; then
               echo "healthy"; break
@@ -208,12 +262,48 @@ jobs:
             git -C /build checkout -q -B main HEAD
             cd /build
             KEEL_REPO=/build bash /build/install.sh \
-              --dir /opt/keel --port 3000 --owner ci@example.test --yes
+              --dir /opt/keel --port 3000 --yes
             test -f /opt/keel/.env
-            grep -q "KEEL_OWNER_EMAIL=\"ci@example.test\"" /opt/keel/.env
+            grep -q "KEEL_CLAIM_REQUIRED=1" /opt/keel/.env
+            ! grep -q "^KEEL_OWNER_HINT_EMAIL=" /opt/keel/.env
+            ! grep -q "^KEEL_OWNER_EMAIL=" /opt/keel/.env
+            ! grep -q "^KEEL_ALLOWED_EMAILS=" /opt/keel/.env
+            ! grep -q "^KEEL_DISABLE_SIGNUP=" /opt/keel/.env
+            grep -q -- "--owner)" /build/install.sh
+            ! grep -q "npm run claim --" /build/install.sh
             test -f /opt/keel/data/keel.db
+            grep -q "UMask=0077" /build/install.sh
+            grep -q "<key>Umask</key><integer>63</integer>" /build/install.sh
+            grep -Fq "chmod 600 \"\$DIR/keel.log\"" /build/install.sh
             echo "installer OK"
           '
+
+      - name: PowerShell installer policy stays in parity
+        shell: pwsh
+        run: |
+          $text = Get-Content -Raw install.ps1
+          if ($text -match '\[switch\]\$Lockdown') { throw "fresh installs still expose -Lockdown" }
+          if ($text -notmatch '\[string\]\$Owner') { throw "backward-compatible -Owner option missing" }
+          if ($text -notmatch '(?m)^KEEL_CLAIM_REQUIRED=1$') { throw "claim requirement missing" }
+          if ($text -match '(?m)^KEEL_OWNER_HINT_EMAIL=') { throw "fresh install publishes an unused identity hint" }
+          if ($text -match '(?m)^KEEL_OWNER_EMAIL="\$Owner"$') { throw "claim hint grants owner authority" }
+          if ($text -match '(?m)^KEEL_ALLOWED_EMAILS="\$Owner"$') { throw "fresh install creates an allowlist" }
+          if ($text -match '(?m)^KEEL_DISABLE_SIGNUP=1$') { throw "fresh local install hard-closes signup" }
+          if ($text -match 'Read-Host.+[Ee]mail') { throw "default install still prompts for an email" }
+          if ($text -match 'npm run claim --') { throw "installer constructs an unsafe claim command" }
+
+  windows-installer-acl:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Data and backup ACLs fail closed
+        shell: pwsh
+        run: ./scripts/windows-installer-acl-check.ps1
 
   audit:
     runs-on: ubuntu-latest
@@ -241,7 +331,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22

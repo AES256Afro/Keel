@@ -87,6 +87,9 @@ async function main() {
       // A proxy is simulated by the tests below, so trust forwarded addresses -
       // this is the shape the XFF assertions are about.
       KEEL_TRUST_PROXY: "1",
+      // A copied desktop marker must never turn the unauthenticated session
+      // handoff endpoints on for non-loopback requests.
+      KEEL_DESKTOP_HANDOFF: "1",
     },
     stdio: "ignore",
     shell: process.platform === "win32",
@@ -161,13 +164,40 @@ async function main() {
         Host: `localhost:${PORT}`,
         "X-Forwarded-For": "203.0.113.9",
       });
-      check("desktop-status is 404 behind a proxy", status === 404, `got ${status}`);
+      check(
+        "desktop marker does not bypass a remote forwarded address",
+        status === 404,
+        `got ${status}`
+      );
 
       status = await raw(`/api/auth/desktop-status?id=${ID}`, {
         Host: `localhost:${PORT}`,
         "X-Forwarded-Host": "notes.example.com",
       });
       check("desktop-status is 404 when a proxy rewrote the host", status === 404, `got ${status}`);
+
+      status = await raw(`/api/auth/desktop-status?id=${ID}`, { Host: `0.0.0.0:${PORT}` });
+      check("desktop-status rejects the wildcard bind address as a Host", status === 404, `got ${status}`);
+
+      status = await raw(`/api/auth/desktop-status?id=${ID}`, {
+        Host: `localhost:${PORT}`,
+        "X-Forwarded-Host": `0.0.0.0:${PORT}`,
+      });
+      check(
+        "desktop-status rejects the wildcard bind address as a forwarded Host",
+        status === 404,
+        `got ${status}`
+      );
+
+      status = await raw(`/api/auth/desktop-status?id=${ID}`, {
+        Host: `localhost:${PORT}`,
+        "X-Forwarded-For": "0.0.0.0",
+      });
+      check(
+        "desktop-status rejects the wildcard bind address as a forwarded client",
+        status === 404,
+        `got ${status}`
+      );
 
       status = await raw(`/api/auth/desktop-status?id=${ID}`, { Host: `localhost:${PORT}` });
       check("desktop-status still works on loopback", status === 200, `got ${status}`);
@@ -200,7 +230,11 @@ async function main() {
     // ---- Rate limiting ------------------------------------------------------
     console.log("\nRate limiting");
     {
-      const auth = { Cookie: `keel_session=${token}` };
+      const auth = {
+        Cookie: `keel_session=${token}`,
+        Origin: BASE,
+        "Sec-Fetch-Site": "same-origin",
+      };
       let limited = 0;
       let firstLimitedAt = -1;
       for (let i = 0; i < 80; i++) {
@@ -216,7 +250,11 @@ async function main() {
       check("search allows a normal burst first", firstLimitedAt >= 30, `limited at request ${firstLimitedAt}`);
     }
     {
-      const auth = { Cookie: `keel_session=${token}` };
+      const auth = {
+        Cookie: `keel_session=${token}`,
+        Origin: BASE,
+        "Sec-Fetch-Site": "same-origin",
+      };
       let got429 = false;
       for (let i = 0; i < 15; i++) {
         const res = await fetch(`${BASE}/api/workspace/export`, {
@@ -277,7 +315,12 @@ async function main() {
       const post = (url, method, body, cookie = token) =>
         fetch(`${BASE}${url}`, {
           method,
-          headers: { Cookie: `keel_session=${cookie}`, "Content-Type": "application/json" },
+          headers: {
+            Cookie: `keel_session=${cookie}`,
+            "Content-Type": "application/json",
+            Origin: BASE,
+            "Sec-Fetch-Site": "same-origin",
+          },
           body: body ? JSON.stringify(body) : undefined,
         });
 
@@ -354,7 +397,12 @@ async function main() {
     // ---- Content size caps --------------------------------------------------
     console.log("\nContent size caps");
     {
-      const auth = { Cookie: `keel_session=${token}`, "Content-Type": "application/json" };
+      const auth = {
+        Cookie: `keel_session=${token}`,
+        "Content-Type": "application/json",
+        Origin: BASE,
+        "Sec-Fetch-Site": "same-origin",
+      };
       const page = await (
         await fetch(`${BASE}/api/pages`, { method: "POST", headers: auth, body: "{}" })
       ).json();

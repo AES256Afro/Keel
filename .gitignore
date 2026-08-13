@@ -23,6 +23,7 @@ yarn-error.log*
 .env.*
 !.env.example
 !.env.prod.example
+!.env.caddy.example
 
 # database
 prisma/*.db
@@ -55,3 +56,11 @@ prisma/*.db-shm
 
 # Tunnel tokens and other deploy credentials live beside the compose file.
 /secrets/
+# SQLite master key for OAuth credentials managed through Settings. It is
+# created beside the database and must never enter source control or a release.
+**/.keel-server-secrets.key
+**/*.keel-server-secrets.key
+
+# Optional operator-specific publication denylist. Put one literal identifier
+# per line; publication checks read it without committing private metadata.
+/.keel-private-patterns

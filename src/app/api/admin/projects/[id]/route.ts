@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { audit } from "@/lib/audit";
+import { requireJsonRequest, requireSameOriginMutation } from "@/lib/same-origin";
 import { requireInstanceOwner, handleApiError } from "@/lib/api";
 import { serializeTags } from "@/lib/site";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const ctx = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Change public projects from Keel Admin");
+    requireJsonRequest(req, "Public-project requests must use application/json");
     const { id } = await params;
     const b = await req.json().catch(() => ({}));
     const data: Record<string, unknown> = {};
@@ -30,9 +33,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const ctx = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Delete public projects from Keel Admin");
     const { id } = await params;
     await prisma.project.delete({ where: { id } });
     await audit("site.project.delete", ctx.user, { target: id });

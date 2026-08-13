@@ -1,13 +1,13 @@
 import { NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { createSession, createSessionToken } from "@/lib/auth";
-import { exchangeCode, googleUserInfo } from "@/lib/oauth";
+import { exchangeCode, googleUserInfo, verifiedGoogleIdentity } from "@/lib/oauth";
 import { provisionUser } from "@/lib/signup";
 import { parkHandoff } from "@/lib/desktop-handoff";
 import { emailAllowed, signupAllowed } from "@/lib/access";
 import { userHasCredentials } from "@/lib/webauthn";
 import { createPending, PENDING_COOKIE } from "@/lib/pending-2fa";
 import { publicOrigin, relativeRedirect } from "@/lib/request-origin";
+import { linkGoogleAccount, resolveGoogleAccount } from "./account";
 
 /** Google sign-in callback: find or create the account, start a session. */
 export async function GET(req: NextRequest) {
@@ -43,28 +43,47 @@ export async function GET(req: NextRequest) {
       code,
       `${publicOrigin(req)}/api/auth/google/callback`
     );
-    const info = await googleUserInfo(token.access_token);
-    const email = info.email.toLowerCase();
+    const info = verifiedGoogleIdentity(await googleUserInfo(token.access_token));
+    // An email string in userinfo is not enough to claim an invite or identify
+    // an account. Google must explicitly attest that it verified the mailbox.
+    if (!info) {
+      return fail("access-denied", "Google did not return a verified email identity");
+    }
+    const email = info.email;
 
-    let user =
-      (await prisma.user.findFirst({ where: { googleId: info.id } })) ??
-      (await prisma.user.findUnique({ where: { email } }));
-    if (user) {
-      // Existing account signing in  -  enforce the instance allowlist.
-      if (!(await emailAllowed(email))) return fail("access-denied", "not allowed on this instance");
-      // Link the Google identity to an existing password account on first use.
-      if (!user.googleId) {
-        user = await prisma.user.update({ where: { id: user.id }, data: { googleId: info.id } });
-      }
-    } else {
+    let resolution = await resolveGoogleAccount(info.id, email);
+    if (resolution.conflict) return fail("access-denied", resolution.conflict);
+    let user = resolution.user;
+    if (!user) {
       // Brand-new account  -  only if sign-ups are open (and allowlisted).
       if (!(await signupAllowed(email))) return fail("access-denied", "new sign-ups are disabled");
-      user = await provisionUser({
-        name: info.name || email.split("@")[0],
-        email,
-        googleId: info.id,
-      });
+      try {
+        user = await provisionUser({
+          name: info.name || email.split("@")[0],
+          email,
+          googleId: info.id,
+          emailVerified: true,
+        });
+      } catch (err) {
+        // Another Google callback, or password registration for the same
+        // address, may have committed after the lookups above. Google has
+        // authenticated this request, so it may continue only if both stable
+        // subject and email now resolve without an identity conflict.
+        resolution = await resolveGoogleAccount(info.id, email);
+        if (resolution.conflict) return fail("access-denied", resolution.conflict);
+        if (!resolution.user) throw err;
+        user = resolution.user;
+      }
     }
+
+    // Existing accounts still obey the sign-in allowlist. Re-check new ones as
+    // well in case access settings changed while provisioning was in flight.
+    if (!(await emailAllowed(email))) return fail("access-denied", "not allowed on this instance");
+
+    const linked = await linkGoogleAccount(user, info.id, email);
+    if (linked.conflict) return fail("access-denied", linked.conflict);
+    if (!linked.user) return fail("google-auth-failed", "account disappeared while linking");
+    user = linked.user;
 
     const desktopId = req.cookies.get("keel-oauth-desktop")?.value;
 

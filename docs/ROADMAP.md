@@ -1,8 +1,8 @@
 # Keel roadmap
 
-Where Keel is, and where it could go. Written after the 1.1.0 packaging
-release, while the security/bug/performance sweeps run. Ordered by value ÷
-effort, not by how interesting it is to build.
+Where Keel is, and where it could go. Current through the 1.2.2 security,
+correctness, performance, packaging, and responsive-layout passes. Ordered by
+value ÷ effort, not by how interesting it is to build.
 
 ## Shipped (1.x)
 
@@ -11,8 +11,9 @@ timeline views · kanban with WIP limits and swimlanes · mind map ↔ board rou
 trip · daily notes · focus mode · split view · sequence reading · graph view ·
 attachments (in-DB) · full-text search · WebAuthn 2FA · audit log · encrypted
 snapshots to local/Drive/OneDrive/Azure/R2 · Litestream replication · OneNote
-mirror · in-app restart + update check · the `keel` CLI · brew/npm/tarball/
-Docker/cloud installs · migration between all of them.
+mirror · responsive mobile browser shell · in-app restart + update check · the
+`keel` CLI · GitHub release tarballs · guided shell/PowerShell installers ·
+Docker/cloud installs · migration between supported install types.
 
 ## Near term - high value, low risk
 
@@ -42,20 +43,20 @@ Docker/cloud installs · migration between all of them.
    (rollups, simple arithmetic across properties). Notion's stickiest feature.
 7. **Calendar view** as a sixth saved-view type, over any date property -
    reuses the timeline view's date plumbing.
-8. **Mobile-responsive layout pass.** The sidebar and split view assume a wide
-   screen. A focused responsive pass makes Keel usable on a phone browser
-   without a native app.
-9. **Import from Notion / Obsidian / Markdown folder.** The OneNote mirror
+8. **Import from Notion / Obsidian / Markdown folder.** The OneNote mirror
    proved the ingestion pattern; a Markdown/Notion-export importer widens the
    on-ramp enormously.
 
 ## Longer term - wishlist
 
-10. **End-to-end encryption option** for the notebook at rest (beyond snapshot
+9. **End-to-end encryption option** for the notebook at rest (beyond snapshot
     encryption) - a genuine differentiator, genuinely hard.
-11. **Plugin/extension API** for custom blocks and property types.
-12. **Multi-workspace federation** - one account, several notebooks, switchable.
-13. **AI, opt-in and local-only.** The README says "No AI" as a promise about
+10. **Plugin/extension API** for custom blocks and property types.
+11. **Independent workspace ownership and cross-instance federation.** Switching
+    among workspaces that invited the same account already ships. The remaining
+    work is creating and owning several independent notebooks, then optionally
+    linking notebooks across Keel servers.
+12. **AI, opt-in and local-only.** The README says "No AI" as a promise about
     the default, not a prohibition forever; if it ever lands it should be a
     local model the user runs, never a phone-home.
 
@@ -94,9 +95,9 @@ module, so it no longer drags in backups and request context.
 
 **Who was exposed:** Docker and the installers run `prisma migrate deploy`, so
 `_prisma_migrations` exists and `ensureSchema()` returns early - those installs
-were never at risk. The exposure was the brew/npm/tarball path, i.e. exactly
-the seamless-update story 1.1.0 shipped, for any database bootstrapped with
-`prisma db push` or restored from a snapshot.
+were never at risk. The exposure was the release-tarball or other self-migrating
+path, for any database bootstrapped with `prisma db push` or restored from a
+snapshot without the migration ledger.
 
 **Worth taking from it:** a comment claiming a test exists is not a test, and a
 migration that "only adds things" is a claim about the SQL, not about the
@@ -113,7 +114,8 @@ to build next.
 - The attachment serve path loads the whole blob into heap (bounded by the
   50 MB cap). If attachments grow, add HTTP Range + streaming - but that fights
   the in-DB storage that makes backups atomic, so it's a real trade to weigh.
-- `bin/keel.mjs` has grown enough to deserve its own small test suite beyond
-  the packaging smoke test.
+- `bin/keel.mjs` now has managed-secret portability coverage, but native
+  launchd, systemd, and Windows Scheduled Task lifecycle tests would still catch
+  OS-specific failures that a containerized packaging check cannot.
 - The `any`-typed cheerio nodes in `onenote.ts` should get real types once the
   HTML→TipTap conversion has tests around it.

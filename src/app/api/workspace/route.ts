@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireContext, handleApiError, ApiError } from "@/lib/api";
-import { assertBackupDirAllowed, backupDirFor, envBackupPassphrase } from "@/lib/backup";
+import { assertBackupDirAllowed, backupDirFor, configuredBackupPassphrase } from "@/lib/backup";
 import { isInstanceOwner } from "@/lib/instance";
 import { MAX_NAME } from "@/lib/limits";
 
 export async function GET() {
   try {
-    const { workspace, role } = await requireContext();
+    const { user, workspace, role } = await requireContext();
+    const workspaceOwner = role === "owner";
+    const instanceOwner = workspaceOwner ? await isInstanceOwner(user) : false;
+    const hasConfiguredPassphrase = workspaceOwner
+      ? Boolean(await configuredBackupPassphrase())
+      : true;
     return NextResponse.json({
       workspace: {
         id: workspace.id,
@@ -15,13 +20,13 @@ export async function GET() {
         role,
         backupEnabled: workspace.backupEnabled,
         backupIntervalHours: workspace.backupIntervalHours,
-        backupDir: workspace.backupDir,
-        backupResolvedDir: backupDirFor(workspace),
+        backupDir: workspaceOwner ? workspace.backupDir : null,
+        backupResolvedDir: instanceOwner ? backupDirFor(workspace) : "",
         backupKeep: workspace.backupKeep,
         backupEncrypt: workspace.backupEncrypt,
-        lastBackupAt: workspace.lastBackupAt?.toISOString() ?? null,
-        lastBackupError: workspace.lastBackupError,
-        hasEnvPassphrase: Boolean(envBackupPassphrase()),
+        lastBackupAt: workspaceOwner ? workspace.lastBackupAt?.toISOString() ?? null : null,
+        lastBackupError: workspaceOwner ? workspace.lastBackupError : null,
+        hasScheduledPassphrase: hasConfiguredPassphrase,
       },
     });
   } catch (err) {
@@ -34,6 +39,7 @@ export async function PATCH(req: NextRequest) {
     const { user, workspace, role } = await requireContext();
     if (role !== "owner") throw new ApiError(403, "Only the workspace owner can change settings");
     const body = await req.json().catch(() => ({}));
+    const instanceOwner = await isInstanceOwner(user);
     const data: Record<string, unknown> = {};
     if (typeof body.name === "string" && body.name.trim()) {
       data.name = body.name.trim().slice(0, MAX_NAME);
@@ -51,7 +57,7 @@ export async function PATCH(req: NextRequest) {
       // Writing backups anywhere on the filesystem is an operator power, not a
       // per-workspace setting - see assertBackupDirAllowed.
       try {
-        assertBackupDirAllowed(dir, { isInstanceOwner: await isInstanceOwner(user) });
+        assertBackupDirAllowed(dir, { isInstanceOwner: instanceOwner });
       } catch (e) {
         throw new ApiError(403, e instanceof Error ? e.message : "That backup folder isn't allowed.");
       }
@@ -59,7 +65,11 @@ export async function PATCH(req: NextRequest) {
     }
     const updated = await prisma.workspace.update({ where: { id: workspace.id }, data });
     return NextResponse.json({
-      workspace: { id: updated.id, name: updated.name, backupResolvedDir: backupDirFor(updated) },
+      workspace: {
+        id: updated.id,
+        name: updated.name,
+        backupResolvedDir: instanceOwner ? backupDirFor(updated) : "",
+      },
     });
   } catch (err) {
     return handleApiError(err);

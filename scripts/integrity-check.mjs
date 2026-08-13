@@ -174,16 +174,37 @@ console.log("\nMigrations and schema agree");
 /* ---------- 4. Privileged routes use the right guard ---------- */
 console.log("\nPrivileged routes are guarded");
 {
+  const proxySource = readFileSync(path.join(root, "src/proxy.ts"), "utf8");
+  check(
+    "the request proxy rejects non-same-origin API mutations globally",
+    proxySource.includes('pathname.startsWith("/api/")') &&
+      proxySource.includes('["POST", "PUT", "PATCH", "DELETE"]') &&
+      proxySource.includes("suppliedOrigin !== expectedOrigin"),
+    "all authenticated API writes need a single default-deny CSRF boundary"
+  );
+
   const instanceRoutes = [
     ...walk(path.join(root, "src/app/api/admin"), (f) => f.endsWith("route.ts")),
     ...walk(path.join(root, "src/app/api/instance"), (f) => f.endsWith("route.ts")),
   ];
+  // Claim-token issuance and hosted bootstrap claiming are intentionally
+  // available to any signed-in account only while the server is globally
+  // unclaimed. The local token still needs fresh OS authorization; the hosted
+  // path requires the high-entropy environment secret and same-origin POST.
+  const SIGNED_IN_UNCLAIMED = new Set([
+    "src/app/api/instance/claim-token/route.ts",
+    "src/app/api/instance/claim-bootstrap/route.ts",
+  ]);
   const wrong = instanceRoutes.filter((f) => {
+    if (SIGNED_IN_UNCLAIMED.has(rel(f))) {
+      const text = readFileSync(f, "utf8");
+      return !/\brequireContext\b/.test(text) || /\brequireOwner\b/.test(text);
+    }
     const text = readFileSync(f, "utf8");
     return /\brequireOwner\b/.test(text) || !/\brequireInstanceOwner\b/.test(text);
   });
   check(
-    `${instanceRoutes.length} instance-wide routes use requireInstanceOwner`,
+    `${instanceRoutes.length} instance routes use their explicit ownership guard`,
     wrong.length === 0,
     wrong.map(rel).join(", ")
   );
@@ -244,6 +265,23 @@ console.log("\nNo secrets in the tree");
     }
   }
   check("no hard-coded secrets", suspicious.length === 0, suspicious.join(", "));
+
+  const dockerignore = readFileSync(path.join(root, ".dockerignore"), "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  check(
+    "managed server-secret keys are excluded from Docker build contexts",
+    dockerignore.includes("**/.keel-server-secrets.key") &&
+      dockerignore.includes("**/*.keel-server-secrets.key"),
+    "exclude both live and exported managed-secret key names"
+  );
+  check(
+    "the operator-private publication denylist is excluded from Docker contexts",
+    dockerignore.includes(".keel-private-patterns") &&
+      dockerignore.includes("**/.keel-private-patterns"),
+    "exclude .keel-private-patterns at every depth"
+  );
 }
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

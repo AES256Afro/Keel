@@ -1,7 +1,9 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { listPublicNews } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "News" };
 
 export default async function NewsIndex() {
   const news = await listPublicNews();

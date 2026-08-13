@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireInstanceOwner, handleApiError, ApiError } from "@/lib/api";
 import { getAccessSettings, updateAccessSettings } from "@/lib/access";
 import { audit } from "@/lib/audit";
+import { requireJsonRequest, requireSameOriginMutation } from "@/lib/same-origin";
 
 export async function GET() {
   try {
@@ -16,6 +17,8 @@ export async function GET() {
 export async function PATCH(req: NextRequest) {
   try {
     const { user } = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Change registration settings from Keel Settings");
+    requireJsonRequest(req, "Registration settings requests must use application/json");
     const body = await req.json().catch(() => ({}));
     const allowedEmails = Array.isArray(body.allowedEmails)
       ? body.allowedEmails.map((e: unknown) => String(e))

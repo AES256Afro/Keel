@@ -164,7 +164,12 @@ async function main() {
   const post = (url, body) =>
     fetch(BASE + url, {
       method: "POST",
-      headers: { Cookie: `keel_session=${ids.token}`, "Content-Type": "application/json" },
+      headers: {
+        Cookie: `keel_session=${ids.token}`,
+        "Content-Type": "application/json",
+        Origin: BASE,
+        "Sec-Fetch-Site": "same-origin",
+      },
       body: JSON.stringify(body ?? {}),
     });
 

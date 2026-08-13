@@ -2,11 +2,13 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentContext } from "@/lib/auth";
-import { keelEnv, keelFlag } from "@/lib/env";
 import { backupRoot } from "@/lib/backup";
 import { attachmentQuotaBytes, maxAttachmentBytes } from "@/lib/attachments";
 import { buildCapabilities, detectStatus, type CapabilityState } from "@/lib/setup-guide";
 import { publicOriginFromHeaders } from "@/lib/request-origin";
+import { getInstanceClaimStatus } from "@/lib/instance";
+import InstanceClaimInstructions from "@/components/InstanceClaimInstructions";
+import { getAccessSettings } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -29,19 +31,20 @@ const PILL: Record<CapabilityState, { label: string; cls: string }> = {
 export default async function SetupPage() {
   const ctx = await getCurrentContext();
   if (!ctx) redirect("/login");
+  const claimStatus = await getInstanceClaimStatus(ctx.user);
+  const access = await getAccessSettings();
 
   const h = await headers();
   const baseUrl = publicOriginFromHeaders(h);
 
   const capabilities = buildCapabilities(baseUrl);
-  const status = detectStatus(ctx.workspace);
+  const status = await detectStatus(ctx.workspace);
   const groups = [...new Set(capabilities.map((c) => c.group))];
 
   const dbUrl = process.env.DATABASE_URL ?? "file:./prisma/dev.db";
   const dbLocation = dbUrl.startsWith("file:")
     ? dbUrl.slice(5)
     : "a PostgreSQL server (managed by your database provider)";
-  const lockedDown = Boolean(keelEnv("ALLOWED_EMAILS")) && keelFlag("DISABLE_SIGNUP");
   const mb = (n: number) => `${Math.round(n / 1048576)} MB`;
 
   return (
@@ -53,6 +56,12 @@ export default async function SetupPage() {
         it goes. Nothing here expires your patience on purpose.
       </p>
 
+      {claimStatus.required && (
+        <div className="mb-8">
+          <InstanceClaimInstructions />
+        </div>
+      )}
+
       {/* Where things live - the honest map of your data. */}
       <section className="mb-10 rounded-lg border border-[var(--border)] p-5" id="your-data">
         <h2 className="mb-3 text-lg font-semibold">Where your data lives</h2>
@@ -60,8 +69,12 @@ export default async function SetupPage() {
           <div className="flex gap-2">
             <dt className="w-44 shrink-0 text-[var(--muted)]">Notes &amp; databases</dt>
             <dd>
-              <code className="rounded bg-[var(--hover)] px-1">{dbLocation}</code>
-              {dbUrl.startsWith("file:") && (
+              <code className="rounded bg-[var(--hover)] px-1">
+                {dbUrl.startsWith("file:") && !claimStatus.isOwner
+                  ? "the server's local Keel database"
+                  : dbLocation}
+              </code>
+              {dbUrl.startsWith("file:") && claimStatus.isOwner && (
                 <span className="text-[var(--muted)]"> - one SQLite file is the whole workspace</span>
               )}
             </dd>
@@ -77,21 +90,39 @@ export default async function SetupPage() {
           <div className="flex gap-2">
             <dt className="w-44 shrink-0 text-[var(--muted)]">Snapshot backups</dt>
             <dd>
-              <code className="rounded bg-[var(--hover)] px-1">{backupRoot()}</code>
+              <code className="rounded bg-[var(--hover)] px-1">
+                {claimStatus.isOwner ? backupRoot() : "the server's configured backup folder"}
+              </code>
               <span className="text-[var(--muted)]"> - plus any cloud destination you connect below</span>
+            </dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-44 shrink-0 text-[var(--muted)]">Server owner</dt>
+            <dd>
+              {claimStatus.required ? (
+                <span className="text-[var(--danger)]">
+                  not claimed - use the server terminal commands above
+                </span>
+              ) : claimStatus.isOwner ? (
+                <span>claimed by this account</span>
+              ) : (
+                <span>claimed by another account</span>
+              )}
             </dd>
           </div>
           <div className="flex gap-2">
             <dt className="w-44 shrink-0 text-[var(--muted)]">Who can sign in</dt>
             <dd>
-              {lockedDown ? (
+              {access.signupDisabled ? (
                 <span>
-                  locked down - sign-ups are off and only allowlisted accounts get in
+                  closed - no new accounts; existing accounts
+                  {access.allowedEmails.length > 0 ? " must be allowlisted" : " can still sign in"}
                 </span>
+              ) : access.allowedEmails.length > 0 ? (
+                <span>restricted - only allowlisted email addresses can register or sign in</span>
               ) : (
                 <span className="text-[var(--danger)]">
-                  open - fine on a private network; set KEEL_ALLOWED_EMAILS and
-                  KEEL_DISABLE_SIGNUP=1 before exposing this to the internet
+                  open - anyone who can reach this server may register and sign in
                 </span>
               )}
             </dd>
