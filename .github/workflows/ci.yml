@@ -274,7 +274,7 @@ jobs:
             test -f /opt/keel/data/keel.db
             grep -q "UMask=0077" /build/install.sh
             grep -q "<key>Umask</key><integer>63</integer>" /build/install.sh
-            grep -q 'chmod 600 "$DIR/keel.log"' /build/install.sh
+            grep -Fq "chmod 600 \"\$DIR/keel.log\"" /build/install.sh
             echo "installer OK"
           '
 
