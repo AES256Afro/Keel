@@ -1,6 +1,6 @@
 # Keel roadmap
 
-Where Keel is, and where it could go. Current through the 1.2.3 security,
+Where Keel is, and where it could go. Current through the 1.2.4 security,
 correctness, performance, packaging, and responsive-layout passes. Ordered by
 value ÷ effort, not by how interesting it is to build.
 

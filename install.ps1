@@ -286,49 +286,144 @@ KEEL_BACKUP_DIR="$($backupDir -replace '\\','/')"
 }
 
 # ---------------------------------------------------------------- install ---
-Say "Installing dependencies"
-npm ci --no-audit --no-fund
-npx prisma generate | Out-Null
-Ok "dependencies installed"
+$stoppedManagedTask = $false
+$stoppedManagedTaskXml = $null
+$installSucceeded = $false
+try {
+  $existingTask = Get-ScheduledTask -TaskName "Keel" -ErrorAction SilentlyContinue
+  if ($existingTask -and $existingTask.State -eq "Running") {
+    $taskActions = @($existingTask.Actions)
+    $taskExecutable = if ($taskActions.Count -eq 1) {
+      [System.IO.Path]::GetFileName($taskActions[0].Execute)
+    } else { "" }
+    $taskLooksLikeKeel = (
+      $taskExecutable -ieq "cmd.exe" -and
+      $taskActions[0].Arguments -match '(?i)\bnpm(?:\.cmd)?[^\r\n]*\bstart\b'
+    )
+    if ($taskActions.Count -eq 1 -and $taskLooksLikeKeel -and $taskActions[0].WorkingDirectory) {
+      $targetDir = [System.IO.Path]::GetFullPath($Dir).TrimEnd('\')
+      $taskDir = [System.IO.Path]::GetFullPath($taskActions[0].WorkingDirectory).TrimEnd('\')
+      if ([string]::Equals($targetDir, $taskDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $stoppedManagedTaskXml = Export-ScheduledTask -TaskName "Keel" -ErrorAction Stop
+        if (-not $stoppedManagedTaskXml) {
+          throw "Could not preserve the verified Keel scheduled task before updating."
+        }
+        Stop-ScheduledTask -TaskName "Keel"
+        $stoppedManagedTask = $true
+        for ($attempt = 0; $attempt -lt 100; $attempt++) {
+          $taskState = (Get-ScheduledTask -TaskName "Keel" -ErrorAction Stop).State
+          if ($taskState -ne "Running") { break }
+          Start-Sleep -Milliseconds 100
+        }
+        if ((Get-ScheduledTask -TaskName "Keel" -ErrorAction Stop).State -eq "Running") {
+          throw "The verified Keel scheduled task did not stop before the update."
+        }
+        Ok "temporarily stopped the verified Keel scheduled task"
+      }
+    }
+  }
 
-# Keep the original Windows ACL across the helper's atomic replacement. The
-# helper itself preserves the byte encoding, non-access settings, and file mode.
-if (-not $createdEnv) {
-  $existingEnvAcl = Get-Acl $envFile
-  $legacyRecoveryStatus = ((& node scripts/recover-v121-installer-env.mjs $envFile) | Out-String).Trim()
-  if ($LASTEXITCODE -eq 0 -and $legacyRecoveryStatus -eq "repaired") {
-    Set-Acl -Path $envFile -AclObject $existingEnvAcl
-    $recoveredLegacyAccess = $true
-    Warn "repaired the blocked Keel 1.2.1 first-account setting"
+  Say "Installing dependencies"
+  npm ci --no-audit --no-fund
+  if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE" }
+  npx prisma generate | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Prisma generation failed with exit code $LASTEXITCODE" }
+  Ok "dependencies installed"
+
+  # Keep the original Windows ACL across the helper's atomic replacement. The
+  # helper itself preserves the byte encoding, non-access settings, and file mode.
+  if (-not $createdEnv) {
+    $existingEnvAcl = Get-Acl $envFile
+    $legacyRecoveryStatus = ((& node scripts/recover-v121-installer-env.mjs $envFile) | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Legacy access inspection failed with exit code $LASTEXITCODE" }
+    if ($legacyRecoveryStatus -eq "repaired") {
+      Set-Acl -Path $envFile -AclObject $existingEnvAcl
+      $recoveredLegacyAccess = $true
+      Warn "repaired the blocked Keel 1.2.1 first-account setting"
+    }
+  }
+
+  Say "Creating the database"
+  npm run db:deploy
+  if ($LASTEXITCODE -ne 0) {
+    throw "Database migration failed. Stop any manually started Keel process and re-run the installer."
+  }
+  Ok "database ready"
+
+  Say "Building"
+  npm run build
+  if ($LASTEXITCODE -ne 0) { throw "Keel build failed with exit code $LASTEXITCODE" }
+  Ok "built"
+  $installSucceeded = $true
+} finally {
+  # A successful -Service update replaces and starts the verified task below.
+  # Every other path restores the exact task that this run stopped.
+  if ($stoppedManagedTask -and (-not $installSucceeded -or -not $Service)) {
+    try {
+      Start-ScheduledTask -TaskName "Keel"
+      Ok "restarted the existing Keel scheduled task"
+      $stoppedManagedTask = $false
+    } catch {
+      $restartError = $_.Exception.Message
+      $restoredPreservedTask = $false
+      if ($stoppedManagedTaskXml) {
+        try {
+          Register-ScheduledTask -TaskName "Keel" -Xml $stoppedManagedTaskXml -Force | Out-Null
+          Start-ScheduledTask -TaskName "Keel"
+          $stoppedManagedTask = $false
+          $restoredPreservedTask = $true
+          Warn "restored the preserved Keel scheduled task definition"
+        } catch {
+          $restartError = "$restartError; preserved task restoration failed: $($_.Exception.Message)"
+        }
+      }
+      if (-not $restoredPreservedTask -and $installSucceeded) {
+        throw "The update succeeded, but the existing Keel scheduled task could not be restarted: $restartError"
+      }
+      if (-not $restoredPreservedTask) {
+        Warn "the update failed and the existing Keel scheduled task could not be restarted automatically"
+      }
+    }
   }
 }
 
-Say "Creating the database"
-npm run db:deploy
-Ok "database ready"
-
-Say "Building"
-npm run build
-Ok "built"
-
 # ---------------------------------------------------------------- service ---
 if ($Service) {
-  Say "Registering the startup task"
-  $taskName = "Keel"
-  $npmCmd   = (Get-Command npm).Source
-  # cmd.exe wrapper: npm is a shim, and Task Scheduler will not run it directly.
-  $action   = New-ScheduledTaskAction -Execute "cmd.exe" `
-                -Argument "/c `"$npmCmd`" start" -WorkingDirectory $Dir
-  $trigger  = New-ScheduledTaskTrigger -AtLogOn
-  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
-                -DontStopIfGoingOnBatteries -StartWhenAvailable `
-                -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+  try {
+    Say "Registering the startup task"
+    $taskName = "Keel"
+    $npmCmd   = (Get-Command npm -ErrorAction Stop).Source
+    # cmd.exe wrapper: npm is a shim, and Task Scheduler will not run it directly.
+    $action   = New-ScheduledTaskAction -Execute "cmd.exe" `
+                  -Argument "/c `"$npmCmd`" start" -WorkingDirectory $Dir
+    $trigger  = New-ScheduledTaskTrigger -AtLogOn
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                  -DontStopIfGoingOnBatteries -StartWhenAvailable `
+                  -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 
-  Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-    -Settings $settings -Description "Keel workspace server" | Out-Null
-  Start-ScheduledTask -TaskName $taskName
-  Ok "scheduled task '$taskName' registered and started"
+    # -Force updates the stopped definition in place. Unlike unregistering it
+    # first, a registration failure leaves the prior task available to restore.
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+      -Settings $settings -Description "Keel workspace server" -Force | Out-Null
+    Start-ScheduledTask -TaskName $taskName
+    $stoppedManagedTask = $false
+    Ok "scheduled task '$taskName' registered and started"
+  } catch {
+    $replacementError = $_
+    if ($stoppedManagedTask) {
+      try {
+        if ($stoppedManagedTaskXml) {
+          Register-ScheduledTask -TaskName "Keel" -Xml $stoppedManagedTaskXml -Force | Out-Null
+        }
+        Start-ScheduledTask -TaskName "Keel"
+        $stoppedManagedTask = $false
+        Warn "service replacement failed; restarted the prior Keel scheduled task"
+      } catch {
+        Warn "service replacement failed and the prior Keel scheduled task could not be restarted"
+      }
+    }
+    throw $replacementError
+  }
 }
 
 # A running process keeps the old environment until it restarts. If this is a
