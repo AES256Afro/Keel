@@ -48,7 +48,9 @@ prisma/*.db-shm
 # endpoints that were not in the repository. Anchor every rule that names a
 # generic directory.
 /backups/
+/data/
 /logs/
+/keel.log
 /dist-desktop/
 # Release artifacts (scripts/package-release.mjs output)
 /dist/

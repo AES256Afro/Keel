@@ -272,6 +272,7 @@ jobs:
             grep -q -- "--owner)" /build/install.sh
             ! grep -q "npm run claim --" /build/install.sh
             test -f /opt/keel/data/keel.db
+            test -z "$(git -C /opt/keel status --porcelain --untracked-files=all)"
             grep -q "UMask=0077" /build/install.sh
             grep -q "<key>Umask</key><integer>63</integer>" /build/install.sh
             grep -Fq "chmod 600 \"\$DIR/keel.log\"" /build/install.sh
