@@ -3,8 +3,9 @@
 Both features are built in - they just need OAuth credentials you create once
 (free). Keel never sees more than it should: Drive access is limited to files
 Keel created itself (`drive.file` scope), and OneDrive access is limited to
-Keel's own App Folder (`Files.ReadWrite.AppFolder`). Refresh tokens are stored
-in your local Keel database only.
+Keel's own App Folder (`Files.ReadWrite.AppFolder`). Workspace refresh tokens
+and storage credentials are encrypted at rest before they are stored in the
+local Keel database.
 
 ## Google (sign-in + Drive backups) - ~5 minutes
 
@@ -17,21 +18,32 @@ in your local Keel database only.
    - Application type: **Web application**
    - Authorized redirect URIs - add all three:
      - `http://localhost:3000/api/auth/google/callback`
+     - `http://localhost:3000/api/account/google/callback`
      - `http://localhost:3000/api/cloud/callback/google`
-     - (add the same pair for any other port/host you serve Keel on)
-5. Copy the Client ID and Client Secret into `.env`:
+     - (add the same three for any other port/host you serve Keel on)
+5. In Keel, open **Settings -> Integrations -> Google**. The panel shows the
+   exact callback URLs for this server. Compare them with the Google console,
+   then paste the Client ID and Client Secret and save.
+6. Keel marks the pair **Saved, not verified**. Complete **Connect Google
+   Drive** from the signed-in workspace to prove Google accepts it. No restart
+   is needed. To test Google sign-in itself, first confirm password sign-in
+   remains available, then use a separate private or incognito window so the
+   Settings session is not replaced.
 
-   ```env
-   GOOGLE_CLIENT_ID="....apps.googleusercontent.com"
-   GOOGLE_CLIENT_SECRET="..."
-   ```
+The secret is write-only in Settings. Keel stores managed credentials encrypted
+with a host key kept outside the database and never sends the saved value back
+to the browser. Operators may instead set `GOOGLE_CLIENT_ID` and
+`GOOGLE_CLIENT_SECRET` in the server environment; environment values lock the
+Google panel so browser settings cannot override them.
 
-6. Restart Keel. The login page now shows **Continue with Google**, and
-   Settings → *Cloud backups* shows **Connect Google Drive**.
-
-Google accounts and password accounts with the same email are linked
-automatically - signing in with Google on an existing email attaches the
-Google identity to that account.
+Google sign-in never takes over a password account merely because the email
+strings match. This fail-closed behavior prevents someone from pre-registering
+another person's address and retaining password access after that person uses
+Google. A signed-in user may instead choose **Link Google sign-in** in Settings.
+That explicit flow is bound to the current session, expires after five minutes,
+can be used once, and requires Google's verified email to exactly match the
+current Keel account. It adds Google without removing the password or any
+security-key requirement.
 
 ## Cloudflare R2 backups - ~3 minutes
 
@@ -49,7 +61,7 @@ continuously on the always-on VPS - see docs/HOSTING.md.)
 Running Keel locally? Settings → *Remote access (Cloudflare Tunnel)* can start
 a **quick tunnel** (instant public URL) or a **named tunnel** (your own domain)
 straight from the UI, as long as `cloudflared` is installed. Lock the instance
-down first (Settings → *Access control*).
+down first (Settings → *Registration and sign-in*).
 
 ## OneDrive backups - ~5 minutes
 
@@ -60,14 +72,44 @@ down first (Settings → *Access control*).
    - Redirect URI: platform **Web**, value
      `http://localhost:3000/api/cloud/callback/onedrive`.
 2. **Certificates & secrets → New client secret** - copy the secret **value**.
-3. Copy into `.env`:
+3. In Keel, open **Settings -> Integrations -> Microsoft**. Copy the exact
+   OneDrive and OneNote callback URLs into the Entra registration, paste the
+   Application (client) ID and secret value, and save.
+4. Complete **Connect OneDrive** or **Connect OneNote** to verify the saved
+   pair. No restart is needed.
 
-   ```env
-   MS_CLIENT_ID="<Application (client) ID>"
-   MS_CLIENT_SECRET="<secret value>"
-   ```
+The Microsoft secret is also write-only and encrypted with the host key.
+`MS_CLIENT_ID` and `MS_CLIENT_SECRET` remain supported as environment-locked
+operator overrides.
 
-4. Restart Keel, then Settings → *Cloud backups* → **Connect OneDrive**.
+Drive and OneNote connection callbacks are bound on the server to the exact
+signed-in session, user, active workspace, provider, and connection purpose.
+The random state expires after ten minutes, is stored only as a digest, and can
+be consumed once. Switching sessions or workspaces in another tab makes the
+callback fail safely instead of writing a refresh token into a different
+workspace. Cancelling at the provider also consumes the state.
+
+## Managed-secret key and recovery
+
+For SQLite, Keel creates `.keel-server-secrets.key` beside the database and
+restricts it to mode `0600` on macOS and Linux. The key is intentionally
+outside the database, so a copied database does not reveal usable managed
+credentials. It protects server OAuth client credentials, Google/OneDrive/
+OneNote refresh tokens, Azure SAS URLs, R2 keys, and the managed scheduled-
+backup passphrase. Legacy plaintext cloud rows are encrypted lazily on first
+use when the host key is available; new or rotated credentials are encrypted
+immediately. Keep the key private and retain it separately when you need those
+credentials to survive a full machine recovery. Never commit it or place it in
+a database backup.
+
+For PostgreSQL, set `KEEL_SERVER_SECRET_KEY` in the host or container secret
+store before saving OAuth credentials in Settings. It must be exactly 32 bytes,
+encoded as 64 hexadecimal characters, 43-character unpadded base64url, or
+44-character standard base64. Keep the same value for the life of the managed
+credentials. Losing or changing it leaves notes usable but makes affected cloud
+integrations and other managed secrets unavailable until the key is recovered
+or the credential is replaced. A raw database backup does not contain usable
+secrets without the sidecar or environment key.
 
 ## How it behaves once connected
 
@@ -92,17 +134,11 @@ No extra configuration; it uses the same `localhost:3000` redirect URIs.
 The desktop app talks to `http://localhost:3000`:
 
 - If your Keel server is already running there (Windows service or
-  `npm run dev`), the app attaches to it - **the server's `.env` applies**,
-  using the same redirect URIs you already registered.
-- If nothing is running, the app starts its own server on port 3000. A
-  standalone Next.js server does **not** read a project `.env`, so the embedded
-  server gets its credentials from `keel.env` in the app's data folder
-  (`%APPDATA%\Keel\keel.env` on Windows, `~/.config/Keel/keel.env` on
-  Linux). The app **creates this file for you on first launch** with commented
-  placeholders - open it, uncomment the `GOOGLE_CLIENT_ID` /
-  `GOOGLE_CLIENT_SECRET` lines, paste your values, then fully close and reopen
-  Keel. "Continue with Google" appears. The same registered redirect URIs
-  work, since the port is still 3000.
+  `npm run dev`), the app attaches to it and uses that server&apos;s Integrations
+  settings or environment overrides.
+- If nothing is running, the app starts its own server on port 3000. Configure
+  Google or Microsoft from **Settings -> Integrations** in the app. The same
+  registered redirect URIs work because the port is still 3000.
 - Only if port 3000 is occupied by a different application does the app fall
   back to a random port - everything works there except Google/OneDrive
   OAuth (whose redirect URIs are port-specific).

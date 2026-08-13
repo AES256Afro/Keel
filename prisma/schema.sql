@@ -47,6 +47,16 @@ CREATE TABLE "AppSetting" (
 );
 
 -- CreateTable
+CREATE TABLE "InstanceClaimToken" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "userId" TEXT NOT NULL,
+    "tokenHash" TEXT NOT NULL,
+    "expiresAt" DATETIME NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "InstanceClaimToken_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
 CREATE TABLE "Project" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "title" TEXT NOT NULL,
@@ -314,6 +324,9 @@ CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
 CREATE UNIQUE INDEX "User_username_key" ON "User"("username");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "User_googleId_key" ON "User"("googleId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "Credential_credentialId_key" ON "Credential"("credentialId");
 
 -- CreateIndex
@@ -324,6 +337,15 @@ CREATE INDEX "AuditEvent_createdAt_idx" ON "AuditEvent"("createdAt");
 
 -- CreateIndex
 CREATE INDEX "AuditEvent_action_createdAt_idx" ON "AuditEvent"("action", "createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "InstanceClaimToken_userId_key" ON "InstanceClaimToken"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "InstanceClaimToken_tokenHash_key" ON "InstanceClaimToken"("tokenHash");
+
+-- CreateIndex
+CREATE INDEX "InstanceClaimToken_expiresAt_idx" ON "InstanceClaimToken"("expiresAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "NewsPost_slug_key" ON "NewsPost"("slug");

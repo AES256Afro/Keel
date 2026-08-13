@@ -9,6 +9,11 @@ prisma/*.db-shm
 .env
 .env.*
 secrets
+.keel-server-secrets.key
+**/.keel-server-secrets.key
+**/*.keel-server-secrets.key
+.keel-private-patterns
+**/.keel-private-patterns
 *.pem
 dist
 dist-desktop

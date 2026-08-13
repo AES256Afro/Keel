@@ -72,11 +72,15 @@ async function seed() {
     return { user, workspace, token };
   };
 
-  // Registered first => the instance owner under the fallback rule.
+  // A claim is explicit. Merely registering first grants no instance powers.
   const owner = await mk("owner@example.test", "Owner");
   const editor = await mk("editor@example.test", "Editor");
   const viewer = await mk("viewer@example.test", "Viewer");
   const stranger = await mk("stranger@example.test", "Stranger");
+
+  await prisma.appSetting.create({
+    data: { key: "instance.ownerUserId", value: owner.user.id },
+  });
 
   await prisma.workspaceMember.create({
     data: { workspaceId: owner.workspace.id, userId: editor.user.id, role: "editor" },
@@ -108,7 +112,7 @@ async function seed() {
  *                workspace they were invited into - that's the keel-workspace
  *                cookie the switcher sets.
  */
-const req = (token, method, url, body, wsId) => {
+const req = (token, method, url, body, wsId, extraHeaders = {}) => {
   const cookies = [];
   if (token) cookies.push(`keel_session=${token}`);
   if (wsId) cookies.push(`keel-workspace=${wsId}`);
@@ -118,6 +122,8 @@ const req = (token, method, url, body, wsId) => {
     headers: {
       ...(cookies.length ? { Cookie: cookies.join("; ") } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(method !== "GET" ? { Origin: BASE, "Sec-Fetch-Site": "same-origin" } : {}),
+      ...extraHeaders,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -132,7 +138,17 @@ async function main() {
   console.log(`Starting server on :${PORT}…`);
   const server = spawn("npx", ["next", "start", "-p", String(PORT)], {
     cwd: root,
-    env: { ...process.env, DATABASE_URL: DB_URL, NODE_ENV: "production", PORT: String(PORT) },
+    env: {
+      ...process.env,
+      DATABASE_URL: DB_URL,
+      NODE_ENV: "production",
+      PORT: String(PORT),
+      KEEL_SERVER_SECRET_KEY: Buffer.alloc(32, 9).toString("base64url"),
+      GOOGLE_CLIENT_ID: "",
+      GOOGLE_CLIENT_SECRET: "",
+      MS_CLIENT_ID: "",
+      MS_CLIENT_SECRET: "",
+    },
     stdio: "ignore",
     shell: process.platform === "win32",
   });
@@ -150,6 +166,12 @@ async function main() {
     const instanceRoutes = [
       ["GET", "/api/instance/access", undefined],
       ["PATCH", "/api/instance/access", { allowedEmails: [], signupDisabled: false }],
+      ["GET", "/api/instance/oauth-settings", undefined],
+      [
+        "PATCH",
+        "/api/instance/oauth-settings",
+        { provider: "google", action: "clear", confirm: true },
+      ],
       ["GET", "/api/instance/tunnel", undefined],
       ["GET", "/api/admin/news", undefined],
       ["POST", "/api/admin/news", { title: "x" }],
@@ -167,7 +189,17 @@ async function main() {
         const res = await req(token, method, url, body);
         check(`${method} ${url} refuses ${label}`, res.status === 403, `got ${res.status}`);
       }
-      const res = await req(OWNER, method, url, body);
+      const ownerMutation = method !== "GET"
+        ? { Origin: BASE, "Sec-Fetch-Site": "same-origin" }
+        : {};
+      const res = await req(
+        OWNER,
+        method,
+        url,
+        body,
+        undefined,
+        ownerMutation
+      );
       check(`${method} ${url} allows the instance owner`, res.status !== 403, `got ${res.status}`);
     }
 
@@ -175,15 +207,281 @@ async function main() {
     console.log("\nAnonymous access");
     for (const [method, url] of [
       ["GET", "/api/instance/access"],
+      ["GET", "/api/instance/oauth-settings"],
       ["GET", "/api/admin/news"],
       ["GET", "/api/search?q=a"],
       ["GET", "/api/notifications"],
       ["POST", "/api/pages"],
       ["POST", "/api/workspace/export"],
+      ["POST", "/api/instance/claim-token"],
+      ["POST", "/api/instance/claim-bootstrap"],
+      ["POST", "/api/account/google/link"],
+      ["GET", "/api/cloud/connect?provider=google"],
+      ["GET", "/api/onenote/connect"],
     ]) {
       const res = await req(null, method, url, method === "POST" ? {} : undefined);
       check(`${method} ${url} rejects anonymous`, res.status === 401, `got ${res.status}`);
     }
+
+    // Any signed-in account may request a machine claim token, but only while
+    // the server is unclaimed. This matrix seeds an explicit owner, so both an
+    // owner and a non-owner must get the same claimed-state conflict rather
+    // than an authorization leak or a fresh credential.
+    for (const [label, token] of [["owner", OWNER], ["non-owner", VIEWER]]) {
+      const res = await req(
+        token,
+        "POST",
+        "/api/instance/claim-token",
+        undefined,
+        undefined,
+        { Origin: BASE, "Sec-Fetch-Site": "same-origin" }
+      );
+      check(`POST /api/instance/claim-token refuses the ${label} after claim`, res.status === 409, `got ${res.status}`);
+    }
+
+    for (const [label, token] of [["owner", OWNER], ["non-owner", VIEWER]]) {
+      const res = await req(
+        token,
+        "POST",
+        "/api/instance/claim-bootstrap",
+        { token: "x".repeat(64) },
+        undefined,
+        { Origin: BASE, "Sec-Fetch-Site": "same-origin" }
+      );
+      const data = await res.json().catch(() => ({}));
+      check(
+        `POST /api/instance/claim-bootstrap does not replace the claimed ${label}`,
+        res.status === 403 && !/configured|not configured/i.test(data.error ?? ""),
+        `${res.status} ${JSON.stringify(data)}`
+      );
+    }
+
+    // ---- Managed OAuth credentials -----------------------------------------
+    console.log("\nManaged OAuth settings");
+    {
+      const clientId = "123456789012-authz.apps.googleusercontent.com";
+      const clientSecret = "GOCSPX-authz-secret-value";
+      const saveBody = {
+        provider: "google",
+        action: "save",
+        clientId,
+        clientSecret,
+      };
+      let res = await req(OWNER, "PATCH", "/api/instance/oauth-settings", saveBody, undefined, {
+        Origin: "https://cross-site.example.test",
+        "Sec-Fetch-Site": "cross-site",
+      });
+      check(
+        "OAuth settings reject a cross-site owner PATCH",
+        res.status === 403,
+        `got ${res.status}`
+      );
+      res = await req(OWNER, "PATCH", "/api/instance/oauth-settings", saveBody, undefined, {
+        Origin: "https://sibling.localhost.test",
+        "Sec-Fetch-Site": "same-site",
+      });
+      check(
+        "OAuth settings reject a same-site sibling owner PATCH",
+        res.status === 403,
+        `got ${res.status}`
+      );
+      res = await req(OWNER, "PATCH", "/api/instance/oauth-settings", saveBody, undefined, {
+        Origin: BASE,
+        "Sec-Fetch-Site": "same-origin",
+        "Content-Type": "text/plain",
+      });
+      check(
+        "OAuth settings reject a non-JSON owner PATCH",
+        res.status === 415,
+        `got ${res.status}`
+      );
+      res = await req(OWNER, "PATCH", "/api/instance/oauth-settings", saveBody, undefined, {
+        Origin: BASE,
+        "Sec-Fetch-Site": "same-origin",
+      });
+      let data = await res.json().catch(() => ({}));
+      check(
+        "the instance owner can save an OAuth pair",
+        res.status === 200 && data.provider?.configured,
+        `${res.status}`
+      );
+
+      const ownerCloudStart = await req(
+        OWNER,
+        "GET",
+        "/api/cloud/connect?provider=google"
+      );
+      const ownerCloudLocation = ownerCloudStart.headers.get("location") ?? "";
+      let ownerCloudState = "";
+      try {
+        ownerCloudState = new URL(ownerCloudLocation).searchParams.get("state") ?? "";
+      } catch {}
+      check(
+        "a workspace owner may start a server-bound cloud connection",
+        ownerCloudStart.status >= 300 &&
+          ownerCloudStart.status < 400 &&
+          ownerCloudState.length >= 32,
+        `${ownerCloudStart.status}`
+      );
+      const viewerCloudStart = await req(
+        VIEWER,
+        "GET",
+        "/api/cloud/connect?provider=google",
+        undefined,
+        ids.owner.workspace.id
+      );
+      check(
+        "a view-only member cannot start a cloud connection for that workspace",
+        viewerCloudStart.status === 403,
+        `got ${viewerCloudStart.status}`
+      );
+      check(
+        "the save response never returns OAuth credential values",
+        !JSON.stringify(data).includes(clientId) && !JSON.stringify(data).includes(clientSecret)
+      );
+
+      res = await req(OWNER, "GET", "/api/instance/oauth-settings");
+      data = await res.json().catch(() => ({}));
+      check(
+        "GET reports managed configuration without returning credentials",
+        res.status === 200 &&
+          data.providers?.google?.source === "managed" &&
+          data.providers?.google?.status === "configured-not-verified" &&
+          data.providers?.google?.verified === false &&
+          data.providers?.google?.verifiedAt === null &&
+          !JSON.stringify(data).includes(clientId) &&
+          !JSON.stringify(data).includes(clientSecret),
+        `${res.status} ${JSON.stringify(data)}`
+      );
+      check(
+        "GET returns exact public callback URLs",
+        data.providers?.google?.callbacks?.signIn === `${BASE}/api/auth/google/callback` &&
+          data.providers?.google?.callbacks?.accountLink ===
+            `${BASE}/api/account/google/callback` &&
+          data.providers?.microsoft?.callbacks?.oneNote === `${BASE}/api/onenote/callback`
+      );
+
+      for (const [label, token] of [
+        ["instance owner", OWNER],
+        ["ordinary signed-in user", VIEWER],
+      ]) {
+        res = await req(token, "POST", "/api/account/google/link", {}, undefined, {
+          Origin: BASE,
+          "Sec-Fetch-Site": "same-origin",
+        });
+        data = await res.json().catch(() => ({}));
+        check(
+          `${label} may start an account-self Google link`,
+          res.status === 200 &&
+            typeof data.authorizationUrl === "string" &&
+            new URL(data.authorizationUrl).searchParams.get("redirect_uri") ===
+              `${BASE}/api/account/google/callback`,
+          `${res.status}`
+        );
+      }
+      res = await req(VIEWER, "POST", "/api/account/google/link", {}, undefined, {
+        Origin: "https://cross-site.example.test",
+        "Sec-Fetch-Site": "cross-site",
+      });
+      check(
+        "account-link initiation rejects cross-site POSTs",
+        res.status === 403,
+        `got ${res.status}`
+      );
+
+      const verify = await testPrisma(root, DB_URL);
+      const encryptedRows = await verify.appSetting.findMany({
+        where: { key: { startsWith: "server.secret.oauth.google." } },
+        select: { value: true },
+      });
+      const allSettings = await verify.appSetting.findMany({ select: { key: true, value: true } });
+      const settingAudits = await verify.auditEvent.findMany({
+        where: { action: "oauth.settings" },
+        select: { target: true, detail: true },
+      });
+      await verify.$disconnect();
+      check("the API writes both fields as encrypted rows", encryptedRows.length === 2);
+      check(
+        "the API database rows contain no plaintext credentials",
+        !JSON.stringify(encryptedRows).includes(clientId) &&
+        !JSON.stringify(encryptedRows).includes(clientSecret)
+      );
+      check(
+        "no AppSetting or database audit row contains submitted OAuth values",
+        !JSON.stringify(allSettings).includes(clientId) &&
+          !JSON.stringify(allSettings).includes(clientSecret) &&
+          !JSON.stringify(settingAudits).includes(clientId) &&
+          !JSON.stringify(settingAudits).includes(clientSecret)
+      );
+
+      res = await req(
+        OWNER,
+        "PATCH",
+        "/api/instance/oauth-settings",
+        { provider: "google", action: "clear", confirm: true },
+        undefined,
+        { Origin: BASE, "Sec-Fetch-Site": "same-origin" }
+      );
+      data = await res.json().catch(() => ({}));
+      check(
+        "confirmed clear removes the managed pair",
+        res.status === 200 && !data.provider?.configured,
+        `${res.status}`
+      );
+
+      res = await req(OWNER, "GET", "/api/instance/audit");
+      data = await res.json().catch(() => ({}));
+      const oauthEvents = (data.events ?? []).filter((event) => event.action === "oauth.settings");
+      check("OAuth setting changes are audited", oauthEvents.length >= 2);
+      check(
+        "OAuth audit entries contain no credential values",
+        !JSON.stringify(oauthEvents).includes(clientId) &&
+          !JSON.stringify(oauthEvents).includes(clientSecret)
+      );
+    }
+
+    // ---- Same-origin instance mutation boundary ----------------------------
+    console.log("\nSame-origin instance mutations");
+    for (const [method, url, body] of [
+      ["PATCH", "/api/instance/access", { allowedEmails: [], signupDisabled: false }],
+      ["POST", "/api/admin/news", { title: "cross-site" }],
+      ["POST", "/api/admin/projects", { title: "cross-site" }],
+      ["POST", "/api/admin/projects/import", { username: "octocat" }],
+      ["POST", "/api/instance/tunnel", { mode: "quick" }],
+      ["POST", "/api/admin/restart", undefined],
+    ]) {
+      let res = await req(OWNER, method, url, body, undefined, {
+        Origin: "https://sibling.localhost.test",
+        "Sec-Fetch-Site": "same-site",
+        ...(body ? { "Content-Type": "text/plain" } : {}),
+      });
+      check(`${method} ${url} rejects a same-site sibling`, res.status === 403, `got ${res.status}`);
+      if (body) {
+        res = await req(OWNER, method, url, body, undefined, {
+          Origin: BASE,
+          "Sec-Fetch-Site": "same-origin",
+          "Content-Type": "text/plain",
+        });
+        check(`${method} ${url} rejects a non-JSON body`, res.status === 415, `got ${res.status}`);
+      }
+    }
+
+    let ordinaryMutation = await req(EDITOR, "POST", "/api/pages", { title: "sibling" }, undefined, {
+      Origin: "https://sibling.localhost.test",
+      "Sec-Fetch-Site": "same-site",
+      "Content-Type": "text/plain",
+    });
+    check(
+      "the global boundary rejects a same-site sibling on ordinary API writes",
+      ordinaryMutation.status === 403,
+      `got ${ordinaryMutation.status}`
+    );
+    ordinaryMutation = await req(EDITOR, "POST", "/api/pages", { title: "same origin" });
+    check(
+      "the global boundary still permits same-origin ordinary API writes",
+      ordinaryMutation.status === 201,
+      `got ${ordinaryMutation.status}`
+    );
 
     // ---- Viewers are read-only ---------------------------------------------
     // Pinned to the workspace they were INVITED into, where their role is viewer.
@@ -241,10 +539,14 @@ async function main() {
     console.log("\nAudit trail");
     {
       // Do something privileged, then check it was written.
-      await req(OWNER, "PATCH", "/api/instance/access", {
-        allowedEmails: ["owner@example.test"],
-        signupDisabled: true,
-      });
+      await req(
+        OWNER,
+        "PATCH",
+        "/api/instance/access",
+        { allowedEmails: ["owner@example.test"], signupDisabled: true },
+        undefined,
+        { Origin: BASE, "Sec-Fetch-Site": "same-origin" }
+      );
       const res = await req(OWNER, "GET", "/api/instance/audit");
       const data = await res.json().catch(() => ({}));
       const events = data.events ?? [];
@@ -264,10 +566,14 @@ async function main() {
       );
 
       // Restore an open allowlist so later checks aren't locked out.
-      await req(OWNER, "PATCH", "/api/instance/access", {
-        allowedEmails: [],
-        signupDisabled: false,
-      });
+      await req(
+        OWNER,
+        "PATCH",
+        "/api/instance/access",
+        { allowedEmails: [], signupDisabled: false },
+        undefined,
+        { Origin: BASE, "Sec-Fetch-Site": "same-origin" }
+      );
     }
 
     // ---- Workspace-scoped owner routes stay workspace-scoped ---------------
@@ -277,6 +583,15 @@ async function main() {
       // scoped to their workspace, not the instance.
       const res = await req(STRANGER, "GET", "/api/workspace/members");
       check("a workspace owner can list their own members", res.status === 200, `got ${res.status}`);
+    }
+    {
+      const res = await req(STRANGER, "GET", "/api/workspace");
+      const body = await res.json().catch(() => ({}));
+      check(
+        "a non-instance workspace owner does not receive the resolved host backup path",
+        res.status === 200 && body.workspace?.backupResolvedDir === "",
+        `${res.status} ${JSON.stringify(body)}`
+      );
     }
     {
       const res = await req(VIEWER, "GET", "/api/workspace/members", undefined, WS);

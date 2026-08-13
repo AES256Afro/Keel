@@ -38,12 +38,15 @@ console.log("Preparing scratch database…");
 prepareDatabase(root, DB_URL);
 
 const prisma = await testPrisma(root, DB_URL);
-// First registered account = instance owner (no KEEL_OWNER_EMAIL in the test env).
+// Instance ownership is an explicit, stable claim.
 const owner = await prisma.user.create({
   data: { email: "boss@example.test", name: "Boss", username: "boss", passwordHash: "x", onboardedAt: new Date() },
 });
 await prisma.workspace.create({
   data: { name: "B", ownerId: owner.id, members: { create: { userId: owner.id, role: "owner" } } },
+});
+await prisma.appSetting.create({
+  data: { key: "instance.ownerUserId", value: owner.id },
 });
 const other = await prisma.user.create({
   data: { email: "other@example.test", name: "O", username: "other", passwordHash: "x", onboardedAt: new Date() },
@@ -88,6 +91,13 @@ async function waitFor(url, tries = 160) {
   return null;
 }
 const as = (who) => ({ headers: { cookie: `keel_session=${tokens[who]}` } });
+const asSameOrigin = (who) => ({
+  headers: {
+    cookie: `keel_session=${tokens[who]}`,
+    origin: BASE,
+    "sec-fetch-site": "same-origin",
+  },
+});
 
 let server = startServer();
 try {
@@ -106,7 +116,7 @@ try {
   res = await fetch(`${BASE}/api/admin/server`, as("other"));
   check("a non-instance-owner cannot read it", res.status === 403, `status ${res.status}`);
 
-  res = await fetch(`${BASE}/api/admin/restart`, { method: "POST", ...as("other") });
+  res = await fetch(`${BASE}/api/admin/restart`, { method: "POST", ...asSameOrigin("other") });
   check("a non-instance-owner cannot restart", res.status === 403, `status ${res.status}`);
   res = await fetch(`${BASE}/api/admin/restart`, { method: "POST" });
   check("anonymous cannot restart", res.status === 401 || res.status === 403, `status ${res.status}`);
@@ -117,7 +127,7 @@ try {
   console.log("\nThe restart itself\n");
 
   const exitPromise = new Promise((resolve) => server.once("exit", resolve));
-  res = await fetch(`${BASE}/api/admin/restart`, { method: "POST", ...as("owner") });
+  res = await fetch(`${BASE}/api/admin/restart`, { method: "POST", ...asSameOrigin("owner") });
   const body = await res.json().catch(() => null);
   check("the owner's restart is accepted, response arrives before the exit", res.status === 200 && body?.ok === true);
   check("the response says it will come back", body?.supervised === true, JSON.stringify(body));

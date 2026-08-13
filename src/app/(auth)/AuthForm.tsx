@@ -43,10 +43,17 @@ export default function AuthForm({
             {mode === "login" ? "Sign in" : "Create your account"}
           </h2>
           {mode === "register" && (
+            <p className="text-sm text-[var(--muted)]">
+              Registration is open on this Keel server. Creating an account does not
+              claim server-wide controls.
+            </p>
+          )}
+          {mode === "register" && (
             <label className="block">
               <span className="text-sm text-[var(--muted)]">Name</span>
               <input
                 name="name"
+                autoComplete="name"
                 required
                 className="mt-1 w-full rounded border border-[var(--border)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
@@ -57,6 +64,8 @@ export default function AuthForm({
             <input
               name="email"
               type="email"
+              autoComplete="email"
+              inputMode="email"
               required
               className="mt-1 w-full rounded border border-[var(--border)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -66,6 +75,7 @@ export default function AuthForm({
             <input
               name="password"
               type="password"
+              autoComplete={mode === "register" ? "new-password" : "current-password"}
               required
               minLength={mode === "register" ? 8 : undefined}
               className="mt-1 w-full rounded border border-[var(--border)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"

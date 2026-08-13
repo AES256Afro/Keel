@@ -5,8 +5,8 @@
 > [CHANGELOG-HARDENING.md](CHANGELOG-HARDENING.md) for what shipped, and
 > `npm test` for the suites that keep it fixed.
 
-Audit of commit `fd2a2a4` (branch `claude/keel-workspace-design-nnkz5b`), performed
-against a local production build (`npm run build && next start`). Findings marked
+Historical audit of a pre-release workspace-design snapshot, performed against
+a local production build (`npm run build && next start`). Findings marked
 **[verified]** were reproduced against a running server; the rest are code-level
 findings with the exploit path described.
 
@@ -74,30 +74,16 @@ blocks the `/api/instance/access` PATCH specifically. It does **not** block the
 tunnel, admin-CMS, or cloud-credential routes, and it does not apply to the
 desktop/local mode at all.
 
-**Fix.** Instance ownership is a different concept from workspace ownership.
-Introduce it explicitly:
-
-```ts
-// src/lib/api.ts - new
-/** The instance operator: the owner of the FIRST workspace, or KEEL_OWNER_EMAIL. */
-export async function requireInstanceOwner() {
-  const ctx = await requireContext();
-  const owner = (process.env.KEEL_OWNER_EMAIL ?? "").trim().toLowerCase();
-  if (owner) {
-    if (ctx.user.email.toLowerCase() !== owner) throw new ApiError(403, "Instance owner only");
-    return ctx;
-  }
-  const first = await prisma.workspace.findFirst({ orderBy: { createdAt: "asc" }, select: { ownerId: true } });
-  if (!first || first.ownerId !== ctx.user.id) throw new ApiError(403, "Instance owner only");
-  return ctx;
-}
-```
-
-Then swap `requireOwner` → `requireInstanceOwner` in **`/api/admin/**`,
-`/api/instance/**`**, and in `src/app/admin/page.tsx:12`. Keep `requireOwner` for
-genuinely workspace-scoped routes (`/api/workspace/members`, `/api/cloud/*`,
-`/api/workspace` PATCH). Add `KEEL_OWNER_EMAIL` to `.env.prod.example` and make
-it required whenever `KEEL_SITE_HOSTS` is set.
+**Fix.** Instance ownership is now separate from workspace ownership and is
+stored as an immutable user ID. New server/source/container installs begin
+unclaimed; a signed-in user generates a five-minute, one-use token and the host
+operator confirms the claim locally with fresh OS authorization. The explicit
+`KEEL_OWNER_USER_ID` remains the stable operator override. Hosted PostgreSQL
+deployments can instead use a high-entropy, write-only bootstrap token once,
+then remove it from the host. Legacy `KEEL_OWNER_EMAIL` can bind only a matching
+Google-verified account and never authorizes password registration by itself.
+`requireInstanceOwner()` protects instance-wide routes while
+`requireOwner()` remains limited to the active workspace.
 
 ---
 
@@ -105,18 +91,18 @@ it required whenever `KEEL_SITE_HOSTS` is set.
 
 `grep` for `rateLimit|throttle|attempts|lockout` across `src/` returns nothing.
 `login()` (`src/app/(auth)/actions.ts:50`) will run bcrypt for every request
-forever. On an internet-reachable instance this is an unbounded online password
-guessing oracle, and - because bcrypt cost 10 burns ~80 ms of CPU per attempt -
-also a cheap CPU-exhaustion DoS.
+forever. On an internet-reachable instance this was an unbounded online password
+guessing oracle and, because the audited build used bcrypt cost 10, also a cheap
+CPU-exhaustion DoS.
 
 Equally unthrottled: `/api/auth/webauthn/authenticate/verify`, `/api/search`
 (full-table `LIKE` scan, see PERF-2), `/api/workspace/import` (100 MB uploads),
 and `/api/workspace/export` (full workspace snapshot).
 
-**Fix.** A small in-process limiter keyed on IP + email for the auth paths
-(5 attempts / 15 min, exponential backoff), and a global per-session budget for
-the expensive endpoints. Persist counters in `AppSetting` or a `LoginAttempt`
-table so a restart doesn't clear the lockout.
+**Fix.** Authentication now has per-address limits, persistent per-account
+failure counters with exponential lockout, and a concurrency gate around bcrypt
+work. Expensive signed-in endpoints have per-user budgets. A process restart no
+longer clears the account lockout.
 
 ### P1-2 · No security headers at all **[verified]** - ✅ FIXED
 
@@ -159,8 +145,9 @@ pruning (`src/lib/backup.ts:415`). It also leaks host paths to the client.
 
 **Fix.** Confine backup directories to an allowed root
 (`KEEL_BACKUP_ROOT`, default `<cwd>/backups`) and reject any resolved path that
-escapes it. Keep the free-form path only when `KEEL_ALLOW_ANY_BACKUP_DIR=1`
-(desktop/local single-user mode).
+escapes it for ordinary workspace owners. Only the instance owner, or a host
+with `KEEL_ALLOW_ANY_BACKUP_DIR=1`, can approve an arbitrary path. Resolved host
+paths are returned only to the instance owner.
 
 ### P1-4 · Nine high-severity advisories in `next` **[verified]** - ✅ FIXED
 
@@ -173,8 +160,8 @@ here:
 - `GHSA-68g3-v927-f742` / `GHSA-4633-3j49-mh5q` - cache confusion of response
   bodies for requests with bodies.
 
-Installed `next@16.2.10`; `16.2.12` is available on the same minor, and
-`npm audit fix` resolves all three packages.
+The audited tree installed `next@16.2.10`. The corrected lockfile installs
+`next@16.2.12`, and the runtime dependency audit is clean.
 
 **Fix.** `npm audit fix`, re-run the smoke test, and add `npm audit --omit=dev
 --audit-level=high` to CI so this doesn't drift again.
@@ -192,7 +179,7 @@ notebook session is stolen.
 cross-subdomain SSO is a hard requirement, mint a short-lived, single-use
 handoff token instead of widening the session cookie's scope.
 
-### P1-6 · Account lifecycle is missing its safety valves - ✅ FIXED
+### P1-6 · Account lifecycle is missing its safety valves - 🟡 PARTIAL
 
 There is no password change, no password reset, no email verification, no session
 list, and no "sign out everywhere". `Session` rows are only ever deleted by
@@ -203,10 +190,12 @@ grows without bound and a leaked 30-day token cannot be revoked by the user.
 `emailAllowed()` is enforced only at *login*, so revoking someone from
 `KEEL_ALLOWED_EMAILS` leaves their existing session valid for up to 30 days.
 
-**Fix.** Add password change (invalidating all other sessions), a sessions list
-with per-session revoke, a `DELETE FROM Session WHERE expiresAt < now()` sweep in
-the `server-init` tick, and an `emailAllowed()` re-check inside `getCurrentUser()`
-(cached briefly).
+**Shipped.** Settings now supports password changes that end other sessions, a
+session list with individual and all-other revocation, expired-session pruning,
+and an `emailAllowed()` re-check for existing sessions. Password-only
+registration still does not verify mailbox ownership, and Keel does not provide
+an email-based password-reset service. A user can explicitly link the matching
+Google-verified identity without replacing the password or security keys.
 
 ---
 
@@ -257,19 +246,18 @@ creates the schema from `prisma/schema.sql` anyway.
 
 ### P2-4 · Second-factor weaknesses - 🟡 PARTIAL
 
-- The pending-2FA record is only consumed on **success**
-  (`src/app/api/auth/webauthn/authenticate/verify/route.ts:32`), so a stolen
-  password grants a 5-minute window of unlimited security-key attempts.
+- A failed security-key verification now consumes the pending 2FA record and
+  clears both cookies, so a stolen password does not buy repeated key attempts.
 - The challenge cookie `keel_wa_chal` is not bound to the pending token, and it
   is shared between the registration and authentication flows.
 - Pending state, desktop handoffs and tunnel state all live in
   `globalThis` maps (`src/lib/pending-2fa.ts:20`, `desktop-handoff.ts:19`,
   `tunnel.ts:22`) - correct for one process, silently broken behind more than one.
 
-**Fix.** Consume the pending record on the first failed verify too; bind the
-challenge to the pending token (store it *in* the pending record rather than a
-separate cookie); document the single-process assumption or move the state to the
-database.
+**Remaining work.** Bind the challenge to the pending token (store it in the
+pending record rather than a separate cookie). Keep the single-process boundary
+explicit, or move the remaining process-local state to a shared durable store
+before supporting multiple replicas.
 
 ### P2-5 · No request-size limits on user content - ✅ FIXED
 
@@ -292,16 +280,17 @@ lists this as deferred.
 **Fix.** An `AuditEvent` table written from the API layer for every
 `requireInstanceOwner` / `requireOwner` route, surfaced read-only in Settings.
 
-### P2-7 · Viewers can exfiltrate the entire workspace - ⚠️ RATE-LIMITED, BEHAVIOUR UNCHANGED
+### P2-7 · Viewers can export the entire workspace - ⚠️ RATE-LIMITED AND AUDITED
 
 `POST /api/workspace/export` uses `requireContext()`, not `requireEditor()`
 (`src/app/api/workspace/export/route.ts:8`), so a **View only** member can
 download a complete snapshot of every page and database. Arguably consistent with
-read access, but it is not what "View only" implies to the person granting it,
-and there's no record it happened.
+read access, but it may not be what "View only" implies to the person granting
+that role. The action is now rate-limited and recorded as `workspace.export`;
+the permission is unchanged.
 
-**Fix.** Decide deliberately: either restrict to editor+, or keep it and log it
-(P2-6) and say so in the sharing UI.
+**Remaining decision.** Either restrict export to editor+, or keep the current
+read-access interpretation and state it explicitly in the sharing UI.
 
 ---
 
@@ -326,12 +315,11 @@ any referrer/proxy log.
 **Fix.** Keep `detail` behind `NODE_ENV !== "production"`; log the full error
 server-side and show the user a stable code.
 
-### P3-3 · bcrypt cost 10 - ❌ OPEN
+### P3-3 · bcrypt cost 10 - ✅ FIXED
 
-`hashPassword()` uses cost 10 (`src/lib/auth.ts:11`). OWASP's current floor is 10
-but the practical recommendation is 12+. Since the app already ships
-`scrypt` for backups, moving to `scrypt`/`argon2id` for passwords is also on the
-table.
+The audited build used cost 10. `hashPassword()` now uses bcrypt cost 12 for new
+passwords and password changes. Existing bcrypt hashes carry their own cost and
+remain verifiable; changing the password replaces the old hash at cost 12.
 
 ---
 
@@ -392,12 +380,11 @@ payload every time you click a task.
 The same DTO backs the database page itself with no pagination, and
 `/api/databases/[id]/export`.
 
-**Fix.** Split the DTO: `getDatabaseSchema()` (properties + member options) for
-record pages, and a paginated `getDatabaseRecords({ cursor, take })` for views.
-Move filter/sort server-side (see PERF-3) and stream CSV export instead of
-building it in memory.
+**Fix.** Record pages now load the schema plus the selected record rather than
+the full database. Full database views still load records client-side; their
+server-side filter, sort, and pagination work remains tracked in PERF-3.
 
-### PERF-2 · Search is a full-table `LIKE` over raw ProseMirror JSON **[verified]** - ✅ FIXED
+### PERF-2 · Search scans raw ProseMirror JSON **[verified]** - 🟡 CORRECTNESS FIXED
 
 ```ts
 // src/app/api/search/route.ts:14
@@ -421,10 +408,11 @@ q=Revenue    -> ['Quarterly notes']     ← the only correct hit
 
 Every page in a workspace matches `paragraph`, `doc`, `text`, and `type`.
 
-**Fix.** Store a derived `Page.plainText` column (flatten the doc on save - the
-walker in `src/lib/markdown.ts` already does most of it) and index *that*. Then
-SQLite FTS5 (or Postgres `tsvector`) over `title + plainText`, with snippets and
-ranking. This also unlocks the search operators listed in the roadmap.
+**Shipped.** A derived `Page.plainText` column is maintained and backfilled,
+with literal wildcard handling, snippets, ranking, and `in:title`, `type`,
+`updated`, and quoted-phrase operators. Search no longer matches editor JSON
+keys. It still uses a bounded `contains` query rather than SQLite FTS5 or a
+PostgreSQL text-search index, so the large-workspace scan cost is not eliminated.
 
 ### PERF-3 · Database views filter and sort entirely in the browser - ❌ OPEN
 
@@ -437,7 +425,7 @@ thread on every keystroke in the filter box.
 **Fix.** Push filter/sort/group into the query alongside PERF-1's pagination, and
 virtualize the table and board bodies.
 
-### PERF-4 · `collectSubtreeIds` scans the whole workspace, per call - ❌ OPEN
+### PERF-4 · `collectSubtreeIds` scans the whole workspace, per call - ✅ FIXED
 
 ```ts
 // src/lib/api.ts:59
@@ -447,9 +435,10 @@ const pages = await prisma.page.findMany({ where: { workspaceId }, select: { id,
 Called on every archive, every hard delete, and every page **move**
 (`pages/[pageId]/route.ts:23,46,73`) - the move path calls it once per drag.
 
-**Fix.** A recursive CTE (`WITH RECURSIVE`) returns the subtree in one query on
-both SQLite and Postgres. Alternatively store a materialized `path` column and
-range-scan it, which also makes breadcrumbs free.
+**Fix.** The function now walks indexed child lookups breadth-first, one query
+per tree depth, bounded by depth and row count. Move validation runs the walk in
+the same transaction as the write, so concurrent moves cannot each pass a stale
+cycle check. Cost now follows the moved subtree rather than every workspace row.
 
 ### PERF-5 · Snapshot is quadratic; restore is one round-trip per row - ✅ FIXED
 
@@ -493,19 +482,16 @@ sidebar layout on **every** navigation.
 
 **Fix.** Build a `Set` of ids first. Same one-line class of fix as PERF-5.
 
-### PERF-8 · Autosave rewrites the whole document every 700 ms - ❌ OPEN
+### PERF-8 · Autosave sends the whole document every 700 ms - 🟡 TRANSPORT OPEN
 
-`Editor.onUpdate` serializes the entire doc (`src/components/Editor.tsx:97`) and
-`DocumentPage` PATCHes all of it (`src/components/DocumentPage.tsx:19-26`). On a
-long page, sustained typing means a full multi-hundred-KB body every 700 ms, each
-one a full-row SQLite rewrite. There is also no failure handling - the "Saved"
-indicator flips to saved regardless of the response status, and no `beforeunload`
-guard, so a failed save is silent data loss.
+`Editor.onUpdate` serializes the entire document and `DocumentPage` PATCHes all
+of it. On a long page, sustained typing still means a full body every 700 ms and
+a full-row rewrite. Reliability is fixed: autosave checks `res.ok`, retries
+transient failures, shows a persistent Try again action, warns during
+`beforeunload`, and flushes on unmount.
 
-**Fix.** Short term: check `res.ok`, surface failures, and add a
-`beforeunload` guard while dirty. Medium term: send ProseMirror steps rather than
-the full document (this is also the groundwork for page history and, later,
-collaborative editing).
+**Remaining work.** Send ProseMirror steps rather than the full document. That
+also provides groundwork for page history and later collaborative editing.
 
 ### PERF-9 · Missing indexes and unbounded tables - ✅ FIXED
 
@@ -521,13 +507,13 @@ collaborative editing).
 `server-init` tick (sessions, notifications > 90 days, visits beyond the newest
 50 per user).
 
-### PERF-10 · No compression, caching, or connection tuning - ❌ OPEN
+### PERF-10 · Compression, caching, and connection tuning - 🟡 PARTIAL
 
-`next.config.ts` is three lines. No `compress` (Caddy does gzip for the VPS, but
-not for desktop/local or Tailscale-direct), no cache headers on export routes, no
-Prisma connection-pool config for the Postgres path, and `PrismaClient` is only
-cached on `globalThis` in development (`src/lib/prisma.ts:7`) - fine for
-`next start`, a leak risk for any future serverless target.
+Next compression is enabled for desktop, local, and Tailscale-direct use. API
+responses default to `no-store` with `Vary: Cookie`; immutable attachments use a
+private cache. Explicit PostgreSQL pool tuning is still operator-provided through
+the database URL, and the production `PrismaClient` lifecycle assumes a long-lived
+Node process rather than a future serverless execution model.
 
 ---
 
@@ -545,10 +531,14 @@ unreachable from git, that every `/api/` URL the client references has a handler
 that every model appears in both migration sets, and that privileged routes use
 the right guard.
 
-## Suggested order of work
+## Historical remediation order
 
-1. **P0-1** - instance-owner split. Nothing else matters while any invitee is an admin.
-2. **C-1** - the three missing backup routes. The data-safety promise is currently false.
+This was the order proposed from the audited snapshot. It is retained as audit
+history, not as the current release backlog; the fixed items above now describe
+their shipped controls.
+
+1. **P0-1** - instance-owner split. Nothing else mattered while any invitee was an admin.
+2. **C-1** - the three missing backup routes. The data-safety promise was false.
 3. **P1-4**, **P1-2**, **P1-1** - dependency bump, headers, rate limiting. Cheap, high coverage.
 4. **P1-3**, **P2-1** - backup path confinement, desktop endpoints gated to loopback.
 5. **C-2** - CI with build + typecheck + lint + audit, so 3 and 4 stay fixed.

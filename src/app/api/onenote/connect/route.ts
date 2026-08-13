@@ -1,17 +1,33 @@
-import { randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { ApiError, handleApiError, requireOwner } from "@/lib/api";
+import { ApiError, enforceLimit, handleApiError, requireOwner } from "@/lib/api";
 import { buildAuthUrl, microsoftConfigured, ONENOTE_SCOPE } from "@/lib/oauth";
 import { publicOrigin } from "@/lib/request-origin";
+import { issueOAuthConnectionState } from "@/lib/oauth-connection-state";
+import { activeRequestSession } from "@/lib/oauth-request-session";
 
 export async function GET(req: NextRequest) {
   try {
-    await requireOwner();
-    if (!microsoftConfigured()) throw new ApiError(400, "Set MS_CLIENT_ID and MS_CLIENT_SECRET first");
-    const state = randomBytes(24).toString("hex");
+    const { user, workspace } = await requireOwner();
+    await enforceLimit("onenote-oauth-start", {
+      limit: 10,
+      windowMs: 10 * 60 * 1000,
+      blockMs: 10 * 60 * 1000,
+      userId: user.id,
+    });
+    if (!(await microsoftConfigured())) {
+      throw new ApiError(400, "Configure Microsoft sign-in in Settings first");
+    }
+    const session = await activeRequestSession(req, user.id);
+    if (!session) throw new ApiError(401, "Not signed in");
+    const { state } = await issueOAuthConnectionState({
+      session,
+      workspaceId: workspace.id,
+      provider: "onedrive",
+      purpose: "onenote",
+    });
     const redirectUri = `${publicOrigin(req)}/api/onenote/callback`;
     const authUrl = new URL(
-      buildAuthUrl({
+      await buildAuthUrl({
         provider: "onedrive",
         redirectUri,
         scope: ONENOTE_SCOPE,
@@ -21,13 +37,8 @@ export async function GET(req: NextRequest) {
     );
     authUrl.searchParams.set("prompt", "consent");
     const response = NextResponse.redirect(authUrl);
-    response.cookies.set("nopin-onenote-state", state, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 600,
-      path: "/",
-    });
+    response.headers.set("Cache-Control", "no-store");
+    response.headers.set("Referrer-Policy", "no-referrer");
     return response;
   } catch (error) {
     return handleApiError(error);

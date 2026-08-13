@@ -9,7 +9,7 @@
 //   node --experimental-strip-types --no-warnings scripts/backup-check.mjs
 import { spawn } from "child_process";
 import { createHash, randomBytes } from "crypto";
-import { rmSync, existsSync, statSync } from "fs";
+import { chmodSync, mkdirSync, rmSync, existsSync, statSync, writeFileSync } from "fs";
 import path from "path";
 import { register } from "node:module";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -105,6 +105,8 @@ async function main() {
       redirect: "manual",
       headers: {
         Cookie: `keel_session=${token}`,
+        Origin: BASE,
+        "Sec-Fetch-Site": "same-origin",
         ...(body && !isForm ? { "Content-Type": "application/json" } : {}),
       },
       body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
@@ -135,7 +137,14 @@ async function main() {
     let res = await req("POST", "/api/workspace/backups", {});
     let data = await res.json().catch(() => ({}));
     check("POST /api/workspace/backups succeeds", res.status === 200, `${res.status} ${JSON.stringify(data)}`);
-    check("returns the written file path", typeof data.file === "string" && data.file.endsWith(".json"), String(data.file));
+    check(
+      "returns only the written filename, not the server path",
+      typeof data.file === "string" &&
+        data.file.endsWith(".json") &&
+        !path.isAbsolute(data.file) &&
+        data.file === data.backups?.[0]?.name,
+      String(data.file)
+    );
     check("returns the refreshed backup list", Array.isArray(data.backups) && data.backups.length === 1);
     const plainName = data.backups?.[0]?.name;
 
@@ -1772,7 +1781,7 @@ async function main() {
 
     // ---- The scheduler stops hammering a workspace that cannot back up ----
     console.log("\nScheduled backups back off instead of retrying every tick");
-    const { backupBackoff } = await import(
+    const { BackupInProgressError, backupBackoff, backupLease } = await import(
       pathToFileURL(path.join(root, "src/lib/backup.ts")).href
     );
     const HOUR = 60 * 60 * 1000;
@@ -1796,6 +1805,103 @@ async function main() {
     );
     backupBackoff.clear("ws-1");
     check("a success clears the backoff", backupBackoff.ready("ws-1"));
+
+    console.log("\nConcurrent backup lease and private files");
+    backupLease.reset();
+    check("the first workspace backup acquires its lease", backupLease.acquire("lease-a"));
+    check("a second backup of the same workspace is refused", !backupLease.acquire("lease-a"));
+    check("a different workspace can back up concurrently", backupLease.acquire("lease-b"));
+    backupLease.release("lease-a");
+    check("the lease is reusable after completion", backupLease.acquire("lease-a"));
+    backupLease.reset();
+    const leaseError = new BackupInProgressError("lease-a");
+    check("the in-progress error carries a safe retry message", leaseError.workspaceId === "lease-a" && leaseError.message.includes("already running"));
+
+    const privateWs = await mkWs("Private backups");
+    const privateRow = {
+      id: privateWs.id,
+      backupDir: null,
+      backupKeep: 3,
+      backupEncrypt: false,
+    };
+    const firstPrivate = await runBackup(privateRow);
+    const secondPrivate = await runBackup(privateRow);
+    check(
+      "two immediate backups reserve distinct names",
+      firstPrivate.file !== secondPrivate.file
+    );
+    if (process.platform !== "win32") {
+      check(
+        "backup directories are mode 0700",
+        (statSync(backupDirFor(privateRow)).mode & 0o777) === 0o700
+      );
+      check(
+        "backup files are mode 0600",
+        (statSync(firstPrivate.file).mode & 0o777) === 0o600 &&
+          (statSync(secondPrivate.file).mode & 0o777) === 0o600
+      );
+
+      const legacyDir = backupDirFor(privateRow);
+      const legacyName = `keel-${privateRow.id.slice(0, 12)}-legacy.json`;
+      const legacyFile = path.join(legacyDir, legacyName);
+      mkdirSync(legacyDir, { recursive: true, mode: 0o755 });
+      writeFileSync(legacyFile, "{}", { mode: 0o644 });
+      chmodSync(legacyDir, 0o755);
+      chmodSync(legacyFile, 0o644);
+      await (await import(pathToFileURL(path.join(root, "src/lib/backup.ts")).href))
+        .listBackups(privateRow);
+      check(
+        "listing hardens an older default backup directory and file",
+        (statSync(legacyDir).mode & 0o777) === 0o700 &&
+          (statSync(legacyFile).mode & 0o777) === 0o600
+      );
+
+      const customDir = path.join(BACKUP_DIR, "shared-custom");
+      const customName = `keel-${privateRow.id.slice(0, 12)}-custom.json`;
+      const customFile = path.join(customDir, customName);
+      mkdirSync(customDir, { recursive: true, mode: 0o755 });
+      writeFileSync(customFile, "{}", { mode: 0o644 });
+      chmodSync(customDir, 0o755);
+      chmodSync(customFile, 0o644);
+      await (await import(pathToFileURL(path.join(root, "src/lib/backup.ts")).href))
+        .listBackups({ ...privateRow, backupDir: customDir });
+      check(
+        "custom shared-folder permissions are left to the operator",
+        (statSync(customDir).mode & 0o777) === 0o755 &&
+          (statSync(customFile).mode & 0o777) === 0o644
+      );
+    }
+    check(
+      "completed backups leave no temporary files",
+      !(await import("fs")).readdirSync(backupDirFor(privateRow)).some((name) => name.endsWith(".tmp"))
+    );
+
+    const { singleFlightBackupTick } = await import(
+      pathToFileURL(path.join(root, "src/lib/backup-single-flight.ts")).href
+    );
+    let releaseTick;
+    let tickCalls = 0;
+    const deferred = new Promise((resolve) => {
+      releaseTick = resolve;
+    });
+    const firstTick = singleFlightBackupTick(async () => {
+      tickCalls++;
+      await deferred;
+    });
+    const secondTick = singleFlightBackupTick(async () => {
+      tickCalls++;
+    });
+    check(
+      "overlapping scheduler ticks share one in-flight run",
+      firstTick === secondTick && tickCalls === 1
+    );
+    releaseTick();
+    await firstTick;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await singleFlightBackupTick(async () => {
+      tickCalls++;
+    });
+    check("the scheduler lease clears after completion", tickCalls === 2, String(tickCalls));
 
     // The other half: an impossible encryption is discovered BEFORE the
     // workspace is read, so a failing tick costs nothing.
@@ -2688,7 +2794,8 @@ async function main() {
         `${res.status} ${JSON.stringify(data).slice(0, 200)}`
       );
       const volBackup = path.basename(String(data.file));
-      const volSize = existsSync(String(data.file)) ? statSync(String(data.file)).size : 0;
+      const volPath = path.join(BACKUP_DIR, workspace.id, volBackup);
+      const volSize = existsSync(volPath) ? statSync(volPath).size : 0;
       check(
         "…to a file larger than a JS string can be, if it is a big enough workspace",
         volSize > (totalBytes * 4) / 3,

@@ -1,17 +1,26 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 
-import { keelEnv } from "@/lib/env";
+import { getSiteSettingsStatus } from "@/lib/instance-settings";
 
-const NOTES_URL = keelEnv("NOTES_URL") ?? "/";
-const SITE_NAME = keelEnv("SITE_NAME") ?? "My projects";
+export async function generateMetadata(): Promise<Metadata> {
+  const site = await getSiteSettingsStatus();
+  return {
+    title: { default: site.name.value, template: `%s | ${site.name.value}` },
+    description: site.tagline.value,
+  };
+}
 
-export default function SiteLayout({ children }: { children: React.ReactNode }) {
+export default async function SiteLayout({ children }: { children: React.ReactNode }) {
+  const site = await getSiteSettingsStatus();
+  const notesUrl = site.notesUrl.value;
+  const siteName = site.name.value;
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--fg)]">
       <header className="border-b border-[var(--border)]">
         <nav className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
           <Link href="/" className="font-semibold tracking-tight">
-            {SITE_NAME}
+            {siteName}
           </Link>
           <div className="flex items-center gap-5 text-sm">
             <Link href="/" className="text-[var(--muted)] hover:text-[var(--fg)]">
@@ -21,7 +30,7 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
               News
             </Link>
             <a
-              href={NOTES_URL}
+              href={notesUrl}
               className="rounded border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--hover)]"
             >
               🔒 My Notes
@@ -32,7 +41,7 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
       <main className="max-w-5xl mx-auto px-6 py-10">{children}</main>
       <footer className="border-t border-[var(--border)] mt-16">
         <div className="max-w-5xl mx-auto px-6 py-6 text-xs text-[var(--faint)]">
-          © {new Date().getFullYear()} {SITE_NAME}
+          © {new Date().getFullYear()} {siteName}
         </div>
       </footer>
     </div>

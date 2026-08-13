@@ -317,6 +317,30 @@ try {
 
   console.log("\nForged headers grant no identity\n");
 
+  {
+    const passwordRoute = await import("fs").then((fs) =>
+      fs.readFileSync(path.join(root, "src/app/api/account/password/route.ts"), "utf8")
+    );
+    const slotStart = passwordRoute.indexOf("withAuthWorkSlot(async () =>");
+    const currentVerify = passwordRoute.indexOf("verifyPassword(currentPassword", slotStart);
+    const reuseVerify = passwordRoute.indexOf("verifyPassword(newPassword", currentVerify);
+    const replacementHash = passwordRoute.indexOf("hashPassword(newPassword)", reuseVerify);
+    const slotEnd = passwordRoute.indexOf("} catch (err)", replacementHash);
+    check(
+      "password changes keep both verifies and the cost-12 hash inside the global work slot",
+      slotStart >= 0 &&
+        currentVerify > slotStart &&
+        reuseVerify > currentVerify &&
+        replacementHash > reuseVerify &&
+        slotEnd > replacementHash
+    );
+    check(
+      "password-change overload is shed with a retryable response",
+      passwordRoute.includes("err instanceof ServerBusyError") &&
+        passwordRoute.includes("new ApiError(503, err.message)")
+    );
+  }
+
   const db = await testPrisma(root, DB_URL);
   const events = await db.auditEvent.findMany({ select: { ip: true } });
   await db.$disconnect();

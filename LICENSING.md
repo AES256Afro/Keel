@@ -1,6 +1,6 @@
 # Keel licensing
 
-Keel 1.2.1 is source-available under the Business Source License 1.1.
+Keel 1.2.2 is source-available under the Business Source License 1.1.
 
 You may run it in production for:
 
@@ -13,7 +13,7 @@ third parties. That keeps a path open for an official hosted product and
 commercial partnerships without taking self-hosting away from individuals or
 internal teams.
 
-On August 13, 2030, Keel 1.2.1 changes to the Apache License 2.0. Future
+On August 13, 2030, Keel 1.2.2 changes to the Apache License 2.0. Future
 versions may have their own Change Date, as allowed by the Business Source
 License.
 

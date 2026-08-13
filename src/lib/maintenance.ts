@@ -10,6 +10,8 @@
 import { prisma } from "@/lib/prisma";
 import { pruneLoginFailures } from "@/lib/rate-limit";
 import { pruneAuditEvents } from "@/lib/audit";
+import { pruneExpiredGoogleAccountLinkStates } from "@/lib/google-account-link";
+import { pruneExpiredOAuthConnectionStates } from "@/lib/oauth-connection-state";
 
 /** Read notifications older than this are dropped. Unread ones are kept. */
 const NOTIFICATION_TTL_DAYS = 90;
@@ -25,6 +27,8 @@ export interface SweepResult {
   visits: number;
   loginFailures: number;
   auditEvents: number;
+  googleLinkStates: number;
+  oauthConnectionStates: number;
 }
 
 export async function runMaintenance(): Promise<SweepResult> {
@@ -34,6 +38,8 @@ export async function runMaintenance(): Promise<SweepResult> {
     visits: 0,
     loginFailures: 0,
     auditEvents: 0,
+    googleLinkStates: 0,
+    oauthConnectionStates: 0,
   };
 
   try {
@@ -67,6 +73,18 @@ export async function runMaintenance(): Promise<SweepResult> {
     result.auditEvents = await pruneAuditEvents(AUDIT_TTL_DAYS);
   } catch (err) {
     console.error("[keel] audit sweep failed", err);
+  }
+
+  try {
+    result.googleLinkStates = await pruneExpiredGoogleAccountLinkStates();
+  } catch (err) {
+    console.error("[keel] Google account-link state sweep failed", err);
+  }
+
+  try {
+    result.oauthConnectionStates = await pruneExpiredOAuthConnectionStates();
+  } catch (err) {
+    console.error("[keel] OAuth connection state sweep failed", err);
   }
 
   return result;

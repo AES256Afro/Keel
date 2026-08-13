@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireContext, requireEditor, handleApiError, ApiError } from "@/lib/api";
 import { safeFilename } from "@/lib/attachments";
+import { requireSameOriginMutation } from "@/lib/same-origin";
 
 /**
  * A Content-Disposition value that survives any stored filename.
@@ -74,10 +75,11 @@ export async function GET(
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ attachmentId: string }> }
 ) {
   try {
+    requireSameOriginMutation(req, "Attachment changes must come from the Keel site.");
     const { workspace } = await requireEditor();
     const { attachmentId } = await params;
     const attachment = await prisma.attachment.findUnique({

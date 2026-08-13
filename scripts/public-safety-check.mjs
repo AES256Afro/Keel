@@ -13,21 +13,31 @@ const listed = execFileSync(
 const files = [...new Set(listed)].filter((name) => fs.existsSync(path.join(root, name)));
 const errors = [];
 
+// Project-specific private identifiers must never be embedded in this tracked
+// guard: doing so would publish the very metadata it is meant to catch. Local
+// operators and CI can provide newline-separated literal strings through an
+// ignored file or environment variable instead. Literal matching is enough
+// here and avoids treating privately supplied values as executable regexes.
+const privatePatternFile = path.join(root, ".keel-private-patterns");
+const privateLiterals = [
+  ...(fs.existsSync(privatePatternFile)
+    ? fs.readFileSync(privatePatternFile, "utf8").split(/\r?\n/)
+    : []),
+  ...(process.env.KEEL_PRIVATE_PATTERNS ?? "").split(/\r?\n/),
+]
+  .map((value) => value.trim())
+  .filter((value) => value && !value.startsWith("#"));
+
 const forbiddenPaths = [
-  { pattern: new RegExp(`(^|/)${"big" + "box"}`, "i"), reason: "private deployment name" },
   { pattern: /(^|\/)\.env(?:\.|$)/, allow: /\.example$/, reason: "runtime environment file" },
+  { pattern: /(^|\/)[^/]*\.keel-server-secrets\.key$/, reason: "managed-credential master key" },
   { pattern: /\.(?:db|sqlite|sqlite3|pem|key|p12|pfx)$/i, reason: "database or private-key material" },
   { pattern: /^(?:backups|node_modules|\.next|dist|dist-desktop)(\/|$)/, reason: "runtime or build artifact" },
 ];
 
 const forbiddenContent = [
-  { pattern: new RegExp("big" + "box", "i"), reason: "private deployment name" },
-  { pattern: new RegExp(`${"tail" + "6233fa"}|tail[0-9a-f]{8,}\\.ts\\.net`, "i"), reason: "private tailnet hostname" },
+  { pattern: /tail[0-9a-f]{8,}\.ts\.net/i, reason: "private tailnet hostname" },
   { pattern: /\/Users\/[A-Za-z0-9._-]+\//, reason: "absolute macOS user path" },
-  { pattern: new RegExp(`/${"chris"}/Projects`, "i"), reason: "private server path" },
-  { pattern: new RegExp(`(?:notes\\.)?${"aes256" + "afro"}\\.com`, "i"), reason: "private deployment domain" },
-  { pattern: new RegExp("c3975c2a296ba301" + "ef3ec984049ceb5b", "i"), reason: "Cloudflare account identifier" },
-  { pattern: new RegExp(`(?:${"sinth" + ".tek"}|protonmail|${"christopher" + ".courtney"})@`, "i"), reason: "private email address" },
 ];
 
 for (const name of files) {
@@ -44,6 +54,12 @@ for (const name of files) {
   if (bytes.includes(0)) continue;
   const text = bytes.toString("utf8");
   if (text.includes("\u2014")) errors.push(`${name}: contains a Unicode em dash`);
+  const lowerText = text.toLowerCase();
+  for (const literal of privateLiterals) {
+    if (lowerText.includes(literal.toLowerCase())) {
+      errors.push(`${name}: contains an operator-supplied private identifier`);
+    }
+  }
   for (const rule of forbiddenContent) {
     if (rule.pattern.test(text)) errors.push(`${name}: contains ${rule.reason}`);
   }

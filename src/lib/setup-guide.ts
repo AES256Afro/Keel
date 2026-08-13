@@ -14,7 +14,8 @@
 //   • Every secret says where it goes: an env var on the server, or a field in
 //     Settings after signing in. Nothing assumes prior knowledge.
 
-import { keelEnv, keelFlag } from "@/lib/env";
+import { keelFlag } from "@/lib/env";
+import { getBackupPassphraseStatus } from "@/lib/instance-settings";
 import { googleConfigured, microsoftConfigured } from "@/lib/oauth";
 
 export type CapabilityState = "ready" | "action-needed" | "optional";
@@ -77,10 +78,11 @@ export function buildCapabilities(baseUrl: string): Capability[] {
             `If asked to configure a consent screen: choose External, fill in only the app name and your email, and skip every optional section.`,
             `Application type: “Web application”.`,
             `Under “Authorized redirect URIs”, add exactly: ${callback("/api/auth/google/callback")}`,
+            `Add the account-link redirect too: ${callback("/api/account/google/callback")}`,
             `Click Create. Copy both values from the dialog - the Client ID (ends in .apps.googleusercontent.com) and the Client secret (starts with GOCSPX-).`,
           ],
           destination:
-            "Server environment: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then restart Keel.",
+            "Settings -> Integrations -> Google. Paste both values and save; no server restart is needed. Server environment values remain a locked operator override.",
         },
       ],
     },
@@ -98,9 +100,10 @@ export function buildCapabilities(baseUrl: string): Capability[] {
           where: { label: "Settings → Backups & data safety", url: "/settings" },
           steps: [
             "Your database and backup folder locations are shown on the Welcome page and below on this page.",
-            "Optional: set KEEL_BACKUP_PASSPHRASE in the server environment to encrypt every snapshot. Do this before your first real backup, and store the passphrase in a password manager - a lost passphrase means unreadable backups, by design.",
+            "Before your first real backup, the instance owner should open Settings -> Scheduled backup secret and save a write-only passphrase. A host operator can instead set KEEL_BACKUP_PASSPHRASE as a locked environment override.",
+            "Keep a separate copy in a password manager. A lost passphrase means unreadable backups, by design, and replacing it does not re-encrypt older files.",
           ],
-          destination: "Nowhere - built in.",
+          destination: "Settings -> Scheduled backup secret, or KEEL_BACKUP_PASSPHRASE in the host secret store.",
         },
       ],
     },
@@ -141,7 +144,8 @@ export function buildCapabilities(baseUrl: string): Capability[] {
             `After creating: the “Application (client) ID” on the Overview page is your MS_CLIENT_ID.`,
             `Then “Certificates & secrets” → “New client secret”. Copy the VALUE column immediately (it is shown once; the Secret ID column is not it - a trap much like R2's).`,
           ],
-          destination: "Server environment: MS_CLIENT_ID and MS_CLIENT_SECRET, then restart Keel.",
+          destination:
+            "Settings -> Integrations -> Microsoft. Paste both values and save; no server restart is needed. Server environment values remain a locked operator override.",
         },
       ],
     },
@@ -208,7 +212,8 @@ export function buildCapabilities(baseUrl: string): Capability[] {
             "Follow the OneDrive steps above (one registration, both redirect URIs).",
             "Then Settings → OneNote hourly import → “Connect OneNote” and approve read access.",
           ],
-          destination: "Server environment: MS_CLIENT_ID and MS_CLIENT_SECRET (shared with OneDrive).",
+          destination:
+            "Settings -> Integrations -> Microsoft (the same saved credential is shared with OneDrive).",
         },
       ],
     },
@@ -318,7 +323,12 @@ interface DetectWorkspace {
 }
 
 /** Live status per capability. Pure reads - env plus the workspace row. */
-export function detectStatus(ws: DetectWorkspace): Record<string, CapabilityStatus> {
+export async function detectStatus(ws: DetectWorkspace): Promise<Record<string, CapabilityStatus>> {
+  const [googleReady, microsoftReady, backupPassphrase] = await Promise.all([
+    googleConfigured(),
+    microsoftConfigured(),
+    getBackupPassphraseStatus(),
+  ]);
   const cloud = (provider: string, title: string): CapabilityStatus =>
     ws.cloudProvider === provider
       ? { state: "ready", detail: ws.cloudEmail ?? "connected" }
@@ -331,26 +341,26 @@ export function detectStatus(ws: DetectWorkspace): Record<string, CapabilityStat
         };
 
   return {
-    "google-signin": googleConfigured()
+    "google-signin": googleReady
       ? { state: "ready", detail: "Configured." }
       : { state: "optional", detail: "Not configured - password sign-in works regardless." },
     "backup-local": {
-      state: keelEnv("BACKUP_PASSPHRASE")
-        ? "ready"
-        : "action-needed",
-      detail: keelEnv("BACKUP_PASSPHRASE")
-        ? "Snapshots are encrypted with your passphrase."
-        : "Works now, but snapshots are UNENCRYPTED until KEEL_BACKUP_PASSPHRASE is set.",
+      state: backupPassphrase.configured ? "ready" : "action-needed",
+      detail: backupPassphrase.configured
+        ? `Snapshots use a ${backupPassphrase.source === "environment" ? "host-managed" : "write-only managed"} passphrase.`
+        : backupPassphrase.source === "managed"
+          ? "The saved passphrase cannot be decrypted. Replace it in Settings before the next encrypted snapshot."
+          : "Works now, but snapshots are UNENCRYPTED until the instance owner saves a passphrase in Settings or the host environment.",
     },
-    "backup-gdrive": googleConfigured()
+    "backup-gdrive": googleReady
       ? cloud("google", "Google Drive")
       : { state: "optional", detail: "Needs Google sign-in configured first (above)." },
-    "backup-onedrive": microsoftConfigured()
+    "backup-onedrive": microsoftReady
       ? cloud("onedrive", "OneDrive")
       : { state: "optional", detail: "Needs the Microsoft registration first." },
     "backup-azure": cloud("azure", "Azure"),
     "backup-r2": cloud("r2", "R2"),
-    "onenote-import": !microsoftConfigured()
+    "onenote-import": !microsoftReady
       ? { state: "optional", detail: "Needs the Microsoft registration first." }
       : ws.oneNoteRefreshToken
         ? { state: "ready", detail: "Connected." }

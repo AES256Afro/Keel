@@ -1,12 +1,17 @@
 import { AwsClient } from "aws4fetch";
 import { createWriteStream } from "node:fs";
-import { open, readFile, stat } from "node:fs/promises";
-import { Readable } from "node:stream";
+import { open, readFile, stat, unlink } from "node:fs/promises";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { prisma } from "@/lib/prisma";
 import { refreshAccessToken, type CloudProvider } from "@/lib/oauth";
 import { isBackupName } from "@/lib/backup-format";
+import { maxBackupUploadBytes } from "@/lib/limits";
+import {
+  loadWorkspaceCredential,
+  rotateWorkspaceCredential,
+} from "@/lib/workspace-secrets";
 
 // Cloud backup storage: Google Drive (app-scoped folder "Keel Backups") and
 // OneDrive (the app's own App Folder). Only files Keel created are visible
@@ -26,26 +31,50 @@ interface CloudWorkspace {
   cloudFolderId: string | null;
 }
 
+const CLOUD_CONTROL_TIMEOUT_MS = 30_000;
+const CLOUD_CHUNK_TIMEOUT_MS = 5 * 60_000;
+const CLOUD_DOWNLOAD_TIMEOUT_MS = 60 * 60_000;
+
+function cloudSignal(timeoutMs: number): AbortSignal {
+  return AbortSignal.timeout(timeoutMs);
+}
+
 export function cloudConnected(ws: { cloudProvider: string | null; cloudRefreshToken: string | null }) {
   return Boolean(ws.cloudProvider && ws.cloudRefreshToken);
 }
 
 async function accessTokenFor(ws: CloudWorkspace): Promise<string> {
   if (!ws.cloudProvider || !ws.cloudRefreshToken) throw new Error("No cloud connection");
-  const token = await refreshAccessToken(ws.cloudProvider as CloudProvider, ws.cloudRefreshToken);
+  if (ws.cloudProvider !== "google" && ws.cloudProvider !== "onedrive") {
+    throw new Error("The cloud provider is not an OAuth provider");
+  }
+  const credential = await loadWorkspaceCredential(ws, ws.cloudProvider);
+  const token = await refreshAccessToken(
+    ws.cloudProvider as CloudProvider,
+    credential.value
+  );
   // Microsoft rotates refresh tokens - persist the newest one.
-  if (token.refresh_token && token.refresh_token !== ws.cloudRefreshToken) {
-    await prisma.workspace
-      .update({ where: { id: ws.id }, data: { cloudRefreshToken: token.refresh_token } })
-      .catch(() => {});
+  if (token.refresh_token && token.refresh_token !== credential.value) {
+    await rotateWorkspaceCredential(
+      ws.id,
+      ws.cloudProvider,
+      credential.storedValue,
+      token.refresh_token
+    );
   }
   return token.access_token;
 }
 
-async function api(token: string, url: string, init: RequestInit = {}) {
+async function api(
+  token: string,
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = CLOUD_CONTROL_TIMEOUT_MS
+) {
   const res = await fetch(url, {
     ...init,
     headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
+    signal: init.signal ?? cloudSignal(timeoutMs),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -65,15 +94,76 @@ async function readFileChunk(
   return chunk;
 }
 
+export class CloudBackupTooLargeError extends Error {
+  constructor() {
+    super("Backup file too large");
+    this.name = "CloudBackupTooLargeError";
+  }
+}
+
+function checkedCloudBackupLimit(maxBytes: number): number {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new Error("Cloud backup byte limit is invalid");
+  }
+  return maxBytes;
+}
+
+export function assertCloudBackupSize(
+  size: number,
+  maxBytes = maxBackupUploadBytes()
+): void {
+  const limit = checkedCloudBackupLimit(maxBytes);
+  if (size > limit) throw new CloudBackupTooLargeError();
+}
+
 export async function writeCloudResponseToFile(
   res: Response,
-  destination: string
+  destination: string,
+  maxBytes = maxBackupUploadBytes()
 ): Promise<void> {
   if (!res.body) throw new Error("Cloud API returned an empty response body");
-  await pipeline(
-    Readable.fromWeb(res.body as unknown as NodeReadableStream),
-    createWriteStream(destination, { flags: "wx", mode: 0o600 })
-  );
+
+  const limit = checkedCloudBackupLimit(maxBytes);
+  const contentLength = res.headers.get("content-length");
+  if (contentLength !== null) {
+    const declaredSize = Number(contentLength);
+    if (Number.isFinite(declaredSize) && declaredSize >= 0) {
+      assertCloudBackupSize(declaredSize, limit);
+    }
+  }
+
+  let writtenBytes = 0;
+  const limiter = new Transform({
+    transform(chunk, _encoding, callback) {
+      const chunkBytes =
+        typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
+      writtenBytes += chunkBytes;
+      if (writtenBytes > limit) {
+        callback(new CloudBackupTooLargeError());
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+
+  const output = createWriteStream(destination, { flags: "wx", mode: 0o600 });
+  let created = false;
+  output.once("open", () => {
+    created = true;
+  });
+  let completed = false;
+  try {
+    await pipeline(
+      Readable.fromWeb(res.body as unknown as NodeReadableStream),
+      limiter,
+      output
+    );
+    completed = true;
+  } finally {
+    if (created && !completed) {
+      await unlink(destination).catch(() => undefined);
+    }
+  }
 }
 
 function xmlEscape(value: string): string {
@@ -160,6 +250,7 @@ async function driveUpload(ws: CloudWorkspace, token: string, name: string, file
           "Content-Range": `bytes ${offset}-${offset + length - 1}/${size}`,
         },
         body: chunk,
+        signal: cloudSignal(CLOUD_CHUNK_TIMEOUT_MS),
       });
       if ((final && !res.ok) || (!final && res.status !== 308)) {
         const detail = await res.text().catch(() => "");
@@ -189,7 +280,12 @@ async function driveList(ws: CloudWorkspace, token: string): Promise<CloudFile[]
 }
 
 async function driveDownload(token: string, fileId: string): Promise<Response> {
-  return api(token, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
+  return api(
+    token,
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+    {},
+    CLOUD_DOWNLOAD_TIMEOUT_MS
+  );
 }
 
 /* ---------- OneDrive (App Folder) ---------- */
@@ -204,11 +300,16 @@ const CHUNK = 25 * 320 * 1024;
 async function oneDriveUpload(token: string, name: string, filePath: string) {
   const { size } = await stat(filePath);
   if (size < 4 * 1024 * 1024) {
-    await api(token, `${GRAPH}/me/drive/special/approot:/${encodeURIComponent(name)}:/content`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: new Uint8Array(await readFile(filePath)),
-    });
+    await api(
+      token,
+      `${GRAPH}/me/drive/special/approot:/${encodeURIComponent(name)}:/content`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: new Uint8Array(await readFile(filePath)),
+      },
+      CLOUD_CHUNK_TIMEOUT_MS
+    );
     return;
   }
   // Large files: upload session with ranged PUTs.
@@ -231,6 +332,7 @@ async function oneDriveUpload(token: string, name: string, filePath: string) {
           "Content-Range": `bytes ${offset}-${offset + length - 1}/${size}`,
         },
         body: chunk,
+        signal: cloudSignal(CLOUD_CHUNK_TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`OneDrive chunk upload failed (${res.status})`);
     }
@@ -257,13 +359,19 @@ async function oneDriveList(token: string): Promise<CloudFile[]> {
 }
 
 async function oneDriveDownload(token: string, fileId: string): Promise<Response> {
-  return api(token, `${GRAPH}/me/drive/items/${encodeURIComponent(fileId)}/content`);
+  return api(
+    token,
+    `${GRAPH}/me/drive/items/${encodeURIComponent(fileId)}/content`,
+    {},
+    CLOUD_DOWNLOAD_TIMEOUT_MS
+  );
 }
 
 /* ---------- Cloudflare R2 (S3-compatible, static keys) ---------- */
 //
 // R2 has no OAuth - requests are signed with SigV4 (aws4fetch). The static
-// credentials are stored as JSON in cloudRefreshToken when cloudProvider="r2".
+// Credentials are serialized as JSON, then encrypted in cloudRefreshToken when
+// cloudProvider="r2".
 
 export interface R2Config {
   endpoint: string; // https://<account-id>.r2.cloudflarestorage.com
@@ -316,12 +424,18 @@ export function normalizeR2Config(value: unknown): R2Config | null {
   return { endpoint: endpoint.origin, bucket, accessKeyId, secretKey };
 }
 
-export function parseR2Config(ws: { cloudRefreshToken: string | null }): R2Config | null {
-  if (!ws.cloudRefreshToken) return null;
+function parseR2Credential(value: string): R2Config | null {
   try {
-    return normalizeR2Config(JSON.parse(ws.cloudRefreshToken));
+    return normalizeR2Config(JSON.parse(value));
   } catch {}
   return null;
+}
+
+async function r2ConfigFor(ws: CloudWorkspace): Promise<R2Config> {
+  const credential = await loadWorkspaceCredential(ws, "r2");
+  const config = parseR2Credential(credential.value);
+  if (!config) throw new Error("The stored R2 credential is invalid. Reconnect R2.");
+  return config;
 }
 
 function r2ClientFor(cfg: R2Config) {
@@ -338,7 +452,10 @@ function r2ClientFor(cfg: R2Config) {
 export async function r2Upload(cfg: R2Config, name: string, filePath: string) {
   const { client, base } = r2ClientFor(cfg);
   const objectUrl = `${base}/${R2_PREFIX}${encodeURIComponent(name)}`;
-  const start = await client.fetch(`${objectUrl}?uploads`, { method: "POST" });
+  const start = await client.fetch(`${objectUrl}?uploads`, {
+    method: "POST",
+    signal: cloudSignal(CLOUD_CONTROL_TIMEOUT_MS),
+  });
   if (!start.ok) throw new Error(`R2 multipart start failed (${start.status})`);
   const uploadIdRaw = /<UploadId>([\s\S]*?)<\/UploadId>/.exec(await start.text())?.[1];
   if (!uploadIdRaw) throw new Error("R2 did not return a multipart upload id");
@@ -358,7 +475,7 @@ export async function r2Upload(cfg: R2Config, name: string, filePath: string) {
       const number = index + 1;
       const res = await client.fetch(
         `${objectUrl}?partNumber=${number}&uploadId=${encodeURIComponent(uploadId)}`,
-        { method: "PUT", body: chunk }
+        { method: "PUT", body: chunk, signal: cloudSignal(CLOUD_CHUNK_TIMEOUT_MS) }
       );
       if (!res.ok) throw new Error(`R2 part ${number} failed (${res.status})`);
       const etag = res.headers.get("etag");
@@ -378,11 +495,15 @@ export async function r2Upload(cfg: R2Config, name: string, filePath: string) {
       method: "POST",
       headers: { "Content-Type": "application/xml" },
       body: completeBody,
+      signal: cloudSignal(CLOUD_CONTROL_TIMEOUT_MS),
     });
     if (!complete.ok) throw new Error(`R2 multipart completion failed (${complete.status})`);
   } catch (err) {
     await client
-      .fetch(`${objectUrl}?uploadId=${encodeURIComponent(uploadId)}`, { method: "DELETE" })
+      .fetch(`${objectUrl}?uploadId=${encodeURIComponent(uploadId)}`, {
+        method: "DELETE",
+        signal: cloudSignal(CLOUD_CONTROL_TIMEOUT_MS),
+      })
       .catch(() => {});
     throw err;
   } finally {
@@ -392,7 +513,9 @@ export async function r2Upload(cfg: R2Config, name: string, filePath: string) {
 
 export async function r2List(cfg: R2Config): Promise<CloudFile[]> {
   const { client, base } = r2ClientFor(cfg);
-  const res = await client.fetch(`${base}?list-type=2&prefix=${encodeURIComponent(R2_PREFIX)}`);
+  const res = await client.fetch(`${base}?list-type=2&prefix=${encodeURIComponent(R2_PREFIX)}`, {
+    signal: cloudSignal(CLOUD_CONTROL_TIMEOUT_MS),
+  });
   if (!res.ok) throw new Error(`R2 list failed (${res.status})`);
   const xml = await res.text();
   const files: CloudFile[] = [];
@@ -414,7 +537,9 @@ export async function r2Download(cfg: R2Config, key: string): Promise<Response> 
   const { client, base } = r2ClientFor(cfg);
   if (!key.startsWith(R2_PREFIX)) throw new Error("R2 backup id is outside the backup prefix");
   const safe = key.split("/").map(encodeURIComponent).join("/");
-  const res = await client.fetch(`${base}/${safe}`);
+  const res = await client.fetch(`${base}/${safe}`, {
+    signal: cloudSignal(CLOUD_DOWNLOAD_TIMEOUT_MS),
+  });
   if (!res.ok) throw new Error(`R2 download failed (${res.status})`);
   return res;
 }
@@ -456,9 +581,10 @@ export function parseAzureSasUrl(raw: string): { base: string; query: string } |
   return { base: `https://${url.hostname}${url.pathname}`, query: url.search.slice(1) };
 }
 
-function azureConfigFor(ws: { cloudRefreshToken: string | null }) {
-  const parsed = ws.cloudRefreshToken ? parseAzureSasUrl(ws.cloudRefreshToken) : null;
-  if (!parsed) throw new Error("Azure not configured");
+async function azureConfigFor(ws: CloudWorkspace) {
+  const credential = await loadWorkspaceCredential(ws, "azure");
+  const parsed = parseAzureSasUrl(credential.value);
+  if (!parsed) throw new Error("The stored Azure credential is invalid. Reconnect Azure.");
   return parsed;
 }
 
@@ -484,6 +610,7 @@ async function azureUpload(cfg: { base: string; query: string }, name: string, f
             "x-ms-version": "2021-08-06",
           },
           body: chunk,
+          signal: cloudSignal(CLOUD_CHUNK_TIMEOUT_MS),
         }
       );
       if (!res.ok) throw new Error(`Azure block ${index + 1} failed (${res.status})`);
@@ -494,6 +621,7 @@ async function azureUpload(cfg: { base: string; query: string }, name: string, f
       method: "PUT",
       headers: { "Content-Type": "application/xml", "x-ms-version": "2021-08-06" },
       body: list,
+      signal: cloudSignal(CLOUD_CONTROL_TIMEOUT_MS),
     });
     if (!complete.ok) throw new Error(`Azure block list failed (${complete.status})`);
   } finally {
@@ -503,7 +631,8 @@ async function azureUpload(cfg: { base: string; query: string }, name: string, f
 
 async function azureList(cfg: { base: string; query: string }): Promise<CloudFile[]> {
   const res = await fetch(
-    `${cfg.base}?restype=container&comp=list&prefix=${encodeURIComponent(AZURE_PREFIX)}&${cfg.query}`
+    `${cfg.base}?restype=container&comp=list&prefix=${encodeURIComponent(AZURE_PREFIX)}&${cfg.query}`,
+    { signal: cloudSignal(CLOUD_CONTROL_TIMEOUT_MS) }
   );
   if (!res.ok) throw new Error(`Azure list failed (${res.status})`);
   const xml = await res.text();
@@ -527,7 +656,10 @@ async function azureDownload(cfg: { base: string; query: string }, blobPath: str
   // value cannot escape the container.
   const safe = blobPath.replace(/^\/+/, "");
   if (!safe.startsWith(AZURE_PREFIX)) throw new Error("Azure backup id is outside the backup prefix");
-  const res = await fetch(`${cfg.base}/${safe.split("/").map(encodeURIComponent).join("/")}?${cfg.query}`);
+  const res = await fetch(
+    `${cfg.base}/${safe.split("/").map(encodeURIComponent).join("/")}?${cfg.query}`,
+    { signal: cloudSignal(CLOUD_DOWNLOAD_TIMEOUT_MS) }
+  );
   if (!res.ok) throw new Error(`Azure download failed (${res.status})`);
   return res;
 }
@@ -547,11 +679,11 @@ export async function azureTestConnection(sasUrl: string) {
 /* ---------- Provider-agnostic API ---------- */
 
 export async function uploadBackupToCloud(ws: CloudWorkspace, name: string, filePath: string) {
-  if (ws.cloudProvider === "azure") return azureUpload(azureConfigFor(ws), name, filePath);
+  if (ws.cloudProvider === "azure") {
+    return azureUpload(await azureConfigFor(ws), name, filePath);
+  }
   if (ws.cloudProvider === "r2") {
-    const cfg = parseR2Config(ws);
-    if (!cfg) throw new Error("R2 not configured");
-    return r2Upload(cfg, name, filePath);
+    return r2Upload(await r2ConfigFor(ws), name, filePath);
   }
   const token = await accessTokenFor(ws);
   if (ws.cloudProvider === "google") return driveUpload(ws, token, name, filePath);
@@ -561,11 +693,9 @@ export async function uploadBackupToCloud(ws: CloudWorkspace, name: string, file
 export async function listCloudBackups(ws: CloudWorkspace): Promise<CloudFile[]> {
   let files: CloudFile[];
   if (ws.cloudProvider === "azure") {
-    files = await azureList(azureConfigFor(ws));
+    files = await azureList(await azureConfigFor(ws));
   } else if (ws.cloudProvider === "r2") {
-    const cfg = parseR2Config(ws);
-    if (!cfg) throw new Error("R2 not configured");
-    files = await r2List(cfg);
+    files = await r2List(await r2ConfigFor(ws));
   } else {
     const token = await accessTokenFor(ws);
     files = ws.cloudProvider === "google" ? await driveList(ws, token) : await oneDriveList(token);
@@ -573,23 +703,32 @@ export async function listCloudBackups(ws: CloudWorkspace): Promise<CloudFile[]>
   return files.filter((f) => isBackupName(f.name));
 }
 
+interface DownloadCloudBackupOptions {
+  declaredSize?: number;
+  maxBytes?: number;
+}
+
 export async function downloadCloudBackupToFile(
   ws: CloudWorkspace,
   fileId: string,
-  destination: string
+  destination: string,
+  options: DownloadCloudBackupOptions = {}
 ): Promise<void> {
+  const maxBytes = options.maxBytes ?? maxBackupUploadBytes();
+  if (options.declaredSize !== undefined) {
+    assertCloudBackupSize(options.declaredSize, maxBytes);
+  }
+
   let res: Response;
   if (ws.cloudProvider === "azure") {
-    res = await azureDownload(azureConfigFor(ws), fileId);
+    res = await azureDownload(await azureConfigFor(ws), fileId);
   } else if (ws.cloudProvider === "r2") {
-    const cfg = parseR2Config(ws);
-    if (!cfg) throw new Error("R2 not configured");
-    res = await r2Download(cfg, fileId);
+    res = await r2Download(await r2ConfigFor(ws), fileId);
   } else {
     const token = await accessTokenFor(ws);
     res = ws.cloudProvider === "google"
       ? await driveDownload(token, fileId)
       : await oneDriveDownload(token, fileId);
   }
-  await writeCloudResponseToFile(res, destination);
+  await writeCloudResponseToFile(res, destination, maxBytes);
 }

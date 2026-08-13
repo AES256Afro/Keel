@@ -11,6 +11,10 @@ import { execSync } from "child_process";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import path from "path";
+import {
+  assertNoSensitiveArtifactPaths,
+  scrubSensitiveArtifactPaths,
+} from "./artifact-safety.mjs";
 
 // fileURLToPath is required for Windows (URL.pathname yields "/C:/..." there).
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -44,6 +48,10 @@ const copies = [
   [path.join(root, ".next", "static"), path.join(standalone, ".next", "static")],
   [path.join(root, "public"), path.join(standalone, "public")],
   [path.join(root, "prisma", "schema.sql"), path.join(standalone, "prisma", "schema.sql")],
+  // Existing desktop databases need data migrations too. schema.sql can only
+  // create a fresh schema; it cannot preserve the effective owner while
+  // introducing explicit machine claims.
+  [path.join(root, "prisma", "migrations"), path.join(standalone, "prisma", "migrations")],
   // Belt-and-braces: make sure the Prisma client + engine are present even if
   // file tracing missed them.
   [path.join(root, "node_modules", ".prisma"), path.join(standalone, "node_modules", ".prisma")],
@@ -74,6 +82,12 @@ for (const dir of ["backups", "logs", "dist-desktop"]) {
     console.log(`scrubbed ${dir}/`);
   }
 }
+scrubSensitiveArtifactPaths(standalone);
+
+// Scrubbing is defense in depth. The independent scan fails closed if tracing
+// or a later copy step introduces another environment or managed-secret path.
+assertNoSensitiveArtifactPaths(standalone, "desktop server bundle");
+assertNoSensitiveArtifactPaths(path.join(root, "desktop"), "desktop shell input");
 
 // 4. Package with electron-builder for the current platform. --publish never:
 // electron-builder must not try to create GitHub releases itself (it does so
