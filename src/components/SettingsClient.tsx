@@ -1686,8 +1686,9 @@ export default function SettingsClient({
           <p className="text-sm text-[var(--muted)]">
             Invite people to this workspace by email. <strong>Can edit</strong> members
             create and change pages; <strong>View only</strong> members can read and
-            search but not modify anything. Invited people who don’t have an account
-            yet are added automatically when they register with that email.
+            search but not modify anything. A verified Google signup can accept its
+            matching invitation automatically. Password signup does not prove mailbox
+            ownership, so invite that account again after it registers to confirm access.
           </p>
 
           <div className="flex flex-wrap items-center gap-2">

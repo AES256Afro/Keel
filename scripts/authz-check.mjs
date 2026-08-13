@@ -13,7 +13,13 @@ import { spawn } from "child_process";
 import { randomBytes } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
-import { cleanDatabase, prepareDatabase, testDatabaseUrl, testPrisma } from "./test-db.mjs";
+import {
+  cleanDatabase,
+  isPostgres,
+  prepareDatabase,
+  testDatabaseUrl,
+  testPrisma,
+} from "./test-db.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DB_NAME = "authz-check";
@@ -37,6 +43,47 @@ function check(name, ok, detail = "") {
 }
 
 const cleanDb = () => cleanDatabase(root, DB_NAME);
+
+async function installInviteDeleteFailure(prisma) {
+  if (isPostgres(DB_URL)) {
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION authz_fail_invite_delete_fn()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD."email" = 'rollback-member@example.test' THEN
+          RAISE EXCEPTION 'forced invite reconciliation failure';
+        END IF;
+        RETURN OLD;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER authz_fail_invite_delete
+      BEFORE DELETE ON "WorkspaceInvite"
+      FOR EACH ROW EXECUTE FUNCTION authz_fail_invite_delete_fn()
+    `);
+  } else {
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER authz_fail_invite_delete
+      BEFORE DELETE ON "WorkspaceInvite"
+      WHEN OLD."email" = 'rollback-member@example.test'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced invite reconciliation failure');
+      END
+    `);
+  }
+}
+
+async function removeInviteDeleteFailure(prisma) {
+  if (isPostgres(DB_URL)) {
+    await prisma.$executeRawUnsafe(
+      'DROP TRIGGER IF EXISTS authz_fail_invite_delete ON "WorkspaceInvite"'
+    );
+    await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS authz_fail_invite_delete_fn()');
+  } else {
+    await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS authz_fail_invite_delete');
+  }
+}
 
 
 async function waitFor(url, tries = 120) {
@@ -533,6 +580,194 @@ async function main() {
         workspaceId: ids.owner.workspace.id,
       });
       check("a stranger cannot switch into another workspace", res.status === 404, `got ${res.status}`);
+    }
+
+    // ---- Existing-account invite reconciliation ---------------------------
+    console.log("\nExisting-account invite reconciliation");
+    {
+      const verify = await testPrisma(root, DB_URL);
+      try {
+        const pendingEmail = "pending-member@example.test";
+        const pendingUser = await verify.user.create({
+          data: {
+            email: pendingEmail,
+            name: "Pending Member",
+            username: "pending-member",
+            passwordHash: "x",
+          },
+        });
+        await verify.workspaceInvite.createMany({
+          data: [
+            { workspaceId: WS, email: pendingEmail, role: "viewer" },
+            {
+              workspaceId: ids.stranger.workspace.id,
+              email: pendingEmail,
+              role: "editor",
+            },
+          ],
+        });
+
+        let res = await req(
+          OWNER,
+          "POST",
+          "/api/workspace/members",
+          { email: pendingEmail, role: "viewer" },
+          WS
+        );
+        let body = await res.json().catch(() => ({}));
+        const [pendingMemberships, currentInvites, foreignInvites] = await Promise.all([
+          verify.workspaceMember.findMany({
+            where: { workspaceId: WS, userId: pendingUser.id },
+          }),
+          verify.workspaceInvite.findMany({ where: { workspaceId: WS, email: pendingEmail } }),
+          verify.workspaceInvite.findMany({
+            where: { workspaceId: ids.stranger.workspace.id, email: pendingEmail },
+          }),
+        ]);
+        check(
+          "an owner reconciles a pending invite after the account exists",
+          res.status === 201 &&
+            pendingMemberships.length === 1 &&
+            pendingMemberships[0]?.role === "viewer" &&
+            currentInvites.length === 0,
+          `${res.status} ${JSON.stringify({ pendingMemberships, currentInvites })}`
+        );
+        check(
+          "the reconciled account is returned as a member, not an invite",
+          body.members?.filter((member) => member.email === pendingEmail).length === 1 &&
+            body.members?.find((member) => member.email === pendingEmail)?.role === "viewer" &&
+            !body.invites?.some((invite) => invite.email === pendingEmail),
+          JSON.stringify(body)
+        );
+        check(
+          "invite reconciliation is scoped to the current workspace",
+          foreignInvites.length === 1 && foreignInvites[0]?.role === "editor",
+          JSON.stringify(foreignInvites)
+        );
+
+        const staleEmail = "stale-member@example.test";
+        const staleUser = await verify.user.create({
+          data: {
+            email: staleEmail,
+            name: "Stale Member",
+            username: "stale-member",
+            passwordHash: "x",
+          },
+        });
+        await verify.workspaceMember.create({
+          data: { workspaceId: WS, userId: staleUser.id, role: "viewer" },
+        });
+        await verify.workspaceInvite.create({
+          data: { workspaceId: WS, email: staleEmail, role: "editor" },
+        });
+
+        res = await req(
+          OWNER,
+          "POST",
+          "/api/workspace/members",
+          { email: staleEmail, role: "editor" },
+          WS
+        );
+        body = await res.json().catch(() => ({}));
+        const [staleMemberships, staleInvites] = await Promise.all([
+          verify.workspaceMember.findMany({
+            where: { workspaceId: WS, userId: staleUser.id },
+          }),
+          verify.workspaceInvite.findMany({ where: { workspaceId: WS, email: staleEmail } }),
+        ]);
+        check(
+          "a repeated invite repairs a stale member-and-invite state idempotently",
+          res.status === 201 &&
+            staleMemberships.length === 1 &&
+            staleMemberships[0]?.role === "viewer" &&
+            staleInvites.length === 0,
+          `${res.status} ${JSON.stringify({ staleMemberships, staleInvites })}`
+        );
+        check(
+          "stale invite cleanup preserves the member's existing role",
+          body.members?.filter((member) => member.email === staleEmail).length === 1 &&
+            body.members?.find((member) => member.email === staleEmail)?.role === "viewer" &&
+            !body.invites?.some((invite) => invite.email === staleEmail),
+          JSON.stringify(body)
+        );
+
+        const rollbackEmail = "rollback-member@example.test";
+        const rollbackUser = await verify.user.create({
+          data: {
+            email: rollbackEmail,
+            name: "Rollback Member",
+            username: "rollback-member",
+            passwordHash: "x",
+          },
+        });
+        await verify.workspaceInvite.create({
+          data: { workspaceId: WS, email: rollbackEmail, role: "editor" },
+        });
+        await installInviteDeleteFailure(verify);
+        try {
+          res = await req(
+            OWNER,
+            "POST",
+            "/api/workspace/members",
+            { email: rollbackEmail, role: "editor" },
+            WS
+          );
+        } finally {
+          await removeInviteDeleteFailure(verify);
+        }
+        const [rollbackMemberships, rollbackInvites] = await Promise.all([
+          verify.workspaceMember.findMany({
+            where: { workspaceId: WS, userId: rollbackUser.id },
+          }),
+          verify.workspaceInvite.findMany({ where: { workspaceId: WS, email: rollbackEmail } }),
+        ]);
+        check(
+          "invite deletion failure rolls back membership reconciliation",
+          res.status === 500 &&
+            rollbackMemberships.length === 0 &&
+            rollbackInvites.length === 1,
+          `${res.status} ${JSON.stringify({ rollbackMemberships, rollbackInvites })}`
+        );
+
+        const unknownEmail = "unknown-invite@example.test";
+        const firstInvite = await req(
+          OWNER,
+          "POST",
+          "/api/workspace/members",
+          { email: unknownEmail, role: "viewer" },
+          WS
+        );
+        const updatedInvite = await req(
+          OWNER,
+          "POST",
+          "/api/workspace/members",
+          { email: unknownEmail, role: "editor" },
+          WS
+        );
+        body = await updatedInvite.json().catch(() => ({}));
+        const [unknownUser, unknownInvites] = await Promise.all([
+          verify.user.findUnique({ where: { email: unknownEmail } }),
+          verify.workspaceInvite.findMany({ where: { workspaceId: WS, email: unknownEmail } }),
+        ]);
+        check(
+          "an unknown account's pending invite can be updated",
+          firstInvite.status === 201 &&
+            updatedInvite.status === 201 &&
+            unknownUser === null &&
+            unknownInvites.length === 1 &&
+            unknownInvites[0]?.role === "editor",
+          `${firstInvite.status}/${updatedInvite.status} ${JSON.stringify({ unknownUser, unknownInvites })}`
+        );
+        check(
+          "the updated pending invite is returned once with its new role",
+          body.invites?.filter((invite) => invite.email === unknownEmail).length === 1 &&
+            body.invites?.find((invite) => invite.email === unknownEmail)?.role === "editor" &&
+            !body.members?.some((member) => member.email === unknownEmail),
+          JSON.stringify(body)
+        );
+      } finally {
+        await verify.$disconnect();
+      }
     }
 
     // ---- The audit trail records privileged actions ------------------------

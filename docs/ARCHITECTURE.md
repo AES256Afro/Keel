@@ -128,9 +128,11 @@ SQLite and PostgreSQL.
 ## Sharing (phase 5)
 
 - **Invites** (`WorkspaceInvite`) - the owner invites by email from Settings →
-  Members & sharing. If the email already has an account the membership is
-  created instantly; otherwise a pending invite converts to a membership when
-  that email registers. No email delivery is required for v1.
+  Members & sharing. If the email already has an account, the membership is
+  created instantly. Otherwise the invitation remains pending. A verified
+  Google signup may accept it automatically; a password signup does not prove
+  mailbox ownership, so the owner confirms that account by inviting it again.
+  No email delivery is required for v1.
 - **Roles** - `owner` (settings, backups, members), `editor` (all content
   operations), `viewer` (read/search/export only). Enforcement is server-side:
   every mutating route goes through `requireEditor()` / `requireOwner()` in
