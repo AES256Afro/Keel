@@ -25,7 +25,12 @@ Create a Microsoft Entra app registration named `Keel OneNote Import`.
    - `User.Read`
    - `offline_access`
 4. Create a client secret.
-5. Add the application client ID and secret to the Keel server environment:
+5. In Keel, open **Settings -> Integrations -> Microsoft**. Confirm the exact
+   callback URL, then paste the application client ID and secret value. The
+   secret field is write-only and changes apply immediately.
+
+For an operator-managed deployment, set the same values in the server
+environment instead. Environment values make the Microsoft panel read-only:
 
 ```dotenv
 MS_CLIENT_ID=application-client-id
@@ -42,8 +47,9 @@ Generate the internal sync secret without printing it to a shared terminal log:
 openssl rand -hex 32
 ```
 
-Restart Keel, open Settings, and select **Connect OneNote**. Microsoft will show
-a consent screen for read-only notebook access.
+Open Settings and select **Connect OneNote**. Microsoft will show a consent
+screen for read-only notebook access. Keel calls a saved credential unverified
+until this real authorization succeeds.
 
 ## Incremental behavior
 
@@ -58,6 +64,21 @@ Each sync:
 
 Microsoft Graph does not provide a OneNote delta endpoint. The metadata scan is
 therefore unavoidable, but it does not duplicate unchanged note content.
+
+Image localization is sequential and each Graph image is capped at 40 MiB, so
+only one bounded image is buffered at a time. A sync can write at most 256 MiB
+and 1,000 new unique image files. Existing hash-deduplicated files do not use
+that per-sync allowance. Across repeated syncs, persisted OneNote image bytes
+share the configured workspace attachment quota with ordinary attachments, and
+a workspace retains at most 10,000 OneNote image files. When a limit is reached,
+page text continues importing and a later sync can resume after stale images
+are cleaned up.
+
+Each changed page's Graph HTML is also capped at 32 MiB from both declared and
+actual streamed bytes. The converted TipTap JSON must remain within the same
+32 MiB restore-safe content limit. A page that crosses either limit is skipped
+without advancing its source timestamp, so a later sync can retry it while the
+rest of the notebook continues.
 
 ## What is preserved
 

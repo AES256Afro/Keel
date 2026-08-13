@@ -18,9 +18,15 @@ RUN apt-get update -qq \
 
 # Litestream (continuous SQLite replication to R2).
 ARG LITESTREAM_VERSION=0.3.13
-ARG TARGETARCH=amd64
-RUN wget -qO /tmp/litestream.deb \
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) LITESTREAM_SHA256="9b05043523c1fb1c4f9800623adf0015683da7fdd55e19b9fe5d28f63fae96b4" ;; \
+      arm64) LITESTREAM_SHA256="073aceebd2bbd58213aad2e05fdf4667ff4ca1140d0be6df308859798c74e8e8" ;; \
+      *) echo "Unsupported Litestream architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && wget -qO /tmp/litestream.deb \
       "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-${TARGETARCH}.deb" \
+    && echo "$LITESTREAM_SHA256  /tmp/litestream.deb" | sha256sum -c - \
     && dpkg -i /tmp/litestream.deb \
     && rm /tmp/litestream.deb
 
@@ -47,6 +53,12 @@ ENV PORT=3000 \
     HOSTNAME=0.0.0.0 \
     DATABASE_URL="file:/data/keel.db" \
     NOPIN_UPLOAD_DIR=/data/uploads
+
+# A fresh named volume mounted over /data inherits the ownership of this image
+# path. Create it for the unprivileged runtime user so the first boot can make
+# the database, uploads, backups, and managed-secret sidecar without a root
+# entrypoint or a one-off host chown.
+RUN mkdir -p /data/backups /data/uploads && chown -R node:node /data
 USER node
 EXPOSE 3000
 

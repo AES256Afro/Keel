@@ -3,7 +3,7 @@ import { getCurrentContext } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { projectTags } from "@/lib/site";
 import { isInstanceOwner } from "@/lib/instance";
-import { keelEnv } from "@/lib/env";
+import { resolveSiteSetting } from "@/lib/instance-settings";
 import AdminClient from "@/components/AdminClient";
 
 export const dynamic = "force-dynamic";
@@ -24,16 +24,17 @@ export default async function AdminPage() {
     );
   }
 
-  const [projects, news] = await Promise.all([
+  const [projects, news, notesUrl] = await Promise.all([
     prisma.project.findMany({
       orderBy: [{ featured: "desc" }, { sortOrder: "asc" }, { createdAt: "desc" }],
     }),
     prisma.newsPost.findMany({ orderBy: [{ createdAt: "desc" }] }),
+    resolveSiteSetting("notesUrl"),
   ]);
 
   return (
     <AdminClient
-      notesUrl={keelEnv("NOTES_URL") ?? "/"}
+      notesUrl={notesUrl}
       projects={projects.map((p) => ({
         id: p.id,
         title: p.title,

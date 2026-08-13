@@ -6,11 +6,11 @@ import { publicOrigin, relativeRedirect } from "@/lib/request-origin";
 
 /** Start Google sign-in. */
 export async function GET(req: NextRequest) {
-  if (!googleConfigured()) {
+  if (!(await googleConfigured())) {
     return relativeRedirect("/login?error=google-not-configured");
   }
   const state = randomBytes(16).toString("hex");
-  const url = buildAuthUrl({
+  const url = await buildAuthUrl({
     provider: "google",
     redirectUri: `${publicOrigin(req)}/api/auth/google/callback`,
     scope: LOGIN_SCOPE,
@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
   const res = NextResponse.redirect(url);
   res.cookies.set("keel-oauth-state", state, {
     httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     maxAge: 600,
     path: "/",
@@ -34,6 +35,7 @@ export async function GET(req: NextRequest) {
   if (desktop && /^[a-f0-9]{16,128}$/.test(desktop)) {
     res.cookies.set("keel-oauth-desktop", desktop, {
       httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: 600,
       path: "/",

@@ -276,6 +276,77 @@ export default function Sidebar({
   const [rootDragOver, setRootDragOver] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const mobileTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileCloseRef = useRef<HTMLButtonElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const desktopFocusRef = useRef<HTMLElement | null>(null);
+  const mobileOpenRef = useRef(false);
+
+  useEffect(() => {
+    mobileOpenRef.current = mobileOpen;
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const trigger = mobileTriggerRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusTimer = window.setTimeout(() => mobileCloseRef.current?.focus(), 0);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMobileOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        sidebarRef.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((element) => element.getClientRects().length > 0);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!sidebarRef.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      const desktopFocus = desktopFocusRef.current;
+      desktopFocusRef.current = null;
+      if (window.matchMedia("(max-width: 767px)").matches) trigger?.focus();
+      else desktopFocus?.focus();
+    };
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const closeOnDesktop = () => {
+      if (desktop.matches) {
+        if (!mobileOpenRef.current) return;
+        desktopFocusRef.current =
+          sidebarRef.current?.querySelector<HTMLElement>('a[href], button:not([disabled])') ??
+          null;
+        setMobileOpen(false);
+      }
+    };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
 
   useEffect(() => {
     if (!accountOpen && !switcherOpen) return;
@@ -429,8 +500,49 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="w-64 shrink-0 bg-[var(--panel)] border-r border-[var(--border)] flex flex-col">
+    <>
+      <div className="keel-mobile-nav-trigger fixed inset-x-0 top-0 z-30 flex h-14 items-center border-b border-[var(--border)] bg-[var(--bg)] px-3 md:hidden">
+        <button
+          ref={mobileTriggerRef}
+          type="button"
+          aria-label="Open workspace navigation"
+          aria-controls="workspace-navigation"
+          aria-expanded={mobileOpen}
+          onClick={() => setMobileOpen(true)}
+          className="flex h-10 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--elevated)] px-3 text-sm font-medium shadow-sm"
+        >
+          <span aria-hidden="true">☰</span>
+          Menu
+        </button>
+      </div>
+      {mobileOpen && (
+        <div
+          aria-hidden="true"
+          onClick={() => setMobileOpen(false)}
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+        />
+      )}
+      <aside
+        ref={sidebarRef}
+        id="workspace-navigation"
+        role={mobileOpen ? "dialog" : undefined}
+        aria-modal={mobileOpen ? true : undefined}
+        aria-label="Workspace navigation"
+        onClickCapture={(event) => {
+          if ((event.target as HTMLElement).closest("a")) setMobileOpen(false);
+        }}
+        className={`${mobileOpen ? "flex" : "hidden"} fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] shrink-0 flex-col border-r border-[var(--border)] bg-[var(--panel)] shadow-2xl md:static md:z-auto md:flex md:w-64 md:max-w-none md:shadow-none`}
+      >
       <div className="px-3 py-3 border-b border-[var(--border)] flex items-center gap-2">
+        <button
+          ref={mobileCloseRef}
+          type="button"
+          aria-label="Close workspace navigation"
+          onClick={() => setMobileOpen(false)}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[var(--border)] text-lg leading-none hover:bg-[var(--hover)] md:hidden"
+        >
+          ×
+        </button>
         <div className="relative flex-1 min-w-0">
           <button
             onClick={(e) => {
@@ -509,7 +621,10 @@ export default function Sidebar({
 
       <div className="px-2 py-2 space-y-0.5 text-sm">
         <button
-          onClick={() => setSearchOpen(true)}
+          onClick={() => {
+            setMobileOpen(false);
+            setSearchOpen(true);
+          }}
           className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-[var(--hover)] text-[var(--muted)]"
         >
           🔍 Search
@@ -519,7 +634,10 @@ export default function Sidebar({
         </button>
         {canEdit && (
           <button
-            onClick={() => setTemplatesOpen(true)}
+            onClick={() => {
+              setMobileOpen(false);
+              setTemplatesOpen(true);
+            }}
             className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-[var(--hover)] text-[var(--muted)]"
           >
             📋 Templates
@@ -683,8 +801,9 @@ export default function Sidebar({
         </div>
       )}
 
+      </aside>
       <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
       <TemplatePicker open={templatesOpen} onClose={() => setTemplatesOpen(false)} />
-    </aside>
+    </>
   );
 }

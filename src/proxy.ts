@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { keelEnv } from "@/lib/env";
+import { requestFacingOrigin } from "@/lib/request-origin";
 
 // Host-based routing: the same deployment serves two faces.
 //   * notes.example.com (default) -> the Keel notebook (routes as-is)
@@ -81,6 +82,50 @@ export function proxy(req: NextRequest) {
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", csp);
+
+  // SameSite=Lax does not stop a sibling subdomain from sending an
+  // authenticated mutation. Put the same-origin boundary in front of every
+  // API write so a newly added route cannot accidentally omit it. OAuth
+  // callbacks are GET requests, and Keel has no cross-origin webhook POSTs.
+  if (
+    pathname.startsWith("/api/") &&
+    ["POST", "PUT", "PATCH", "DELETE"].includes(req.method)
+  ) {
+    const syncSecret = keelEnv("SYNC_SECRET");
+    const suppliedSyncSecret =
+      req.headers.get("x-keel-sync-secret") ?? req.headers.get("x-nopin-sync-secret");
+    const authenticatedSync =
+      req.method === "POST" &&
+      pathname === "/api/onenote/sync" &&
+      Boolean(syncSecret && syncSecret.length >= 32 && suppliedSyncSecret === syncSecret);
+    if (authenticatedSync) {
+      return NextResponse.next({ request: { headers: requestHeaders } });
+    }
+    const supplied = req.headers.get("origin");
+    let suppliedOrigin: string | null = null;
+    try {
+      suppliedOrigin = supplied ? new URL(supplied).origin : null;
+    } catch {
+      suppliedOrigin = null;
+    }
+    let expectedOrigin: string | null = null;
+    try {
+      expectedOrigin = new URL(requestFacingOrigin(req)).origin;
+    } catch {
+      expectedOrigin = null;
+    }
+    if (
+      !suppliedOrigin ||
+      !expectedOrigin ||
+      suppliedOrigin !== expectedOrigin ||
+      req.headers.get("sec-fetch-site") === "cross-site"
+    ) {
+      return NextResponse.json(
+        { error: "This change must come from the Keel site." },
+        { status: 403 }
+      );
+    }
+  }
 
   const url = req.nextUrl.clone();
   const rewriting = SITE_HOSTS.includes(host) && !isReserved(pathname);

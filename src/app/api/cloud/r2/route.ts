@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireOwner, handleApiError, ApiError } from "@/lib/api";
 import { normalizeR2Config, r2TestConnection } from "@/lib/cloud";
 import { audit } from "@/lib/audit";
+import { sealWorkspaceCredential } from "@/lib/workspace-secrets";
 
 /** Connect Cloudflare R2 as the cloud backup target (owner-only). Credentials
  *  are validated by listing the bucket, then stored on the workspace. */
@@ -46,7 +47,11 @@ export async function POST(req: NextRequest) {
       where: { id: workspace.id },
       data: {
         cloudProvider: "r2",
-        cloudRefreshToken: JSON.stringify(cfg),
+        cloudRefreshToken: sealWorkspaceCredential(
+          workspace.id,
+          "r2",
+          JSON.stringify(cfg)
+        ),
         cloudEmail: `R2: ${bucket}`,
         cloudFolderId: null,
       },

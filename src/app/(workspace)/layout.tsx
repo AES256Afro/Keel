@@ -26,7 +26,7 @@ export default async function WorkspaceLayout({ children }: { children: React.Re
   // Only the username is ever sent to the workspace UI  -  not the real name.
   const username = ctx.user.username ?? ctx.user.email.split("@")[0];
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-dvh overflow-hidden">
       <Sidebar
         needsBackupSetup={!ctx.workspace.cloudProvider}
         workspaceId={ctx.workspace.id}
@@ -50,7 +50,9 @@ export default async function WorkspaceLayout({ children }: { children: React.Re
         unreadNotifications={unreadNotifications}
         logoutAction={logout}
       />
-      <main className="flex-1 overflow-y-auto">{children}</main>
+      <main className="min-w-0 flex-1 scroll-pt-14 overflow-y-auto pt-14 md:scroll-pt-0 md:pt-0">
+        {children}
+      </main>
     </div>
   );
 }

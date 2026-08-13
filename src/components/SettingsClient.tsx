@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { startRegistration } from "@simplewebauthn/browser";
 import ThemeSelect, { type Theme } from "@/components/ThemeSelect";
 import SetupHint from "@/components/SetupHint";
+import InstanceClaimInstructions from "@/components/InstanceClaimInstructions";
+import OperatorSettingsPanel from "@/components/OperatorSettingsPanel";
 import { isEncryptedBackupName } from "@/lib/backup-format";
 
 interface WorkspaceSettings {
@@ -18,7 +20,7 @@ interface WorkspaceSettings {
   backupEncrypt: boolean;
   lastBackupAt: string | null;
   lastBackupError: string | null;
-  hasEnvPassphrase: boolean;
+  hasScheduledPassphrase: boolean;
 }
 
 /** Modal passphrase prompt with a masked (password) input - window.prompt shows
@@ -105,6 +107,8 @@ export interface CloudStatus {
 export interface AccessSettingsDTO {
   allowedEmails: string[];
   signupDisabled: boolean;
+  allowedEmailsLocked: boolean;
+  signupLocked: boolean;
   envLocked: boolean;
   ownerEmail: string;
 }
@@ -146,6 +150,445 @@ function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+type OAuthProviderName = "google" | "microsoft";
+type OAuthProviderState = {
+  provider: OAuthProviderName;
+  configured: boolean;
+  status:
+    | "verified"
+    | "configured-not-verified"
+    | "not-configured"
+    | "incomplete"
+    | "unavailable";
+  source: "environment" | "managed" | "none";
+  locked: boolean;
+  clientIdConfigured: boolean;
+  clientSecretConfigured: boolean;
+  verified: boolean;
+  verifiedAt: string | null;
+  callbacks: Record<string, string>;
+  testPaths: Record<string, string>;
+};
+
+const OAUTH_COPY: Record<
+  OAuthProviderName,
+  {
+    title: string;
+    purpose: string;
+    callbackLabels: Record<string, string>;
+    testLabels: Record<string, string>;
+    impact: string;
+    verificationNote: string;
+  }
+> = {
+  google: {
+    title: "Google",
+    purpose: "Google sign-in and Google Drive backups",
+    callbackLabels: {
+      signIn: "Sign-in callback",
+      accountLink: "Account-link callback",
+      cloud: "Drive callback",
+    },
+    testLabels: { cloud: "Connect Google Drive" },
+    impact: "Google sign-in and Google Drive connections may need to be authorized again.",
+    verificationNote:
+      "Connect Google Drive here to verify the credential without changing your signed-in account. To test Google sign-in, first confirm password sign-in still works, then use a separate private or incognito window.",
+  },
+  microsoft: {
+    title: "Microsoft",
+    purpose: "OneDrive backups and the read-only OneNote mirror",
+    callbackLabels: { cloud: "OneDrive callback", oneNote: "OneNote callback" },
+    testLabels: { cloud: "Connect OneDrive", oneNote: "Connect OneNote" },
+    impact: "OneDrive and OneNote connections may need to be authorized again.",
+    verificationNote:
+      "Connect OneDrive or OneNote to verify the credential within this signed-in workspace.",
+  },
+};
+
+function OAuthIntegrations() {
+  const router = useRouter();
+  const [providers, setProviders] = useState<Record<OAuthProviderName, OAuthProviderState> | null>(
+    null
+  );
+  const [drafts, setDrafts] = useState<
+    Record<OAuthProviderName, { clientId: string; clientSecret: string }>
+  >({
+    google: { clientId: "", clientSecret: "" },
+    microsoft: { clientId: "", clientSecret: "" },
+  });
+  const [working, setWorking] = useState<OAuthProviderName | null>(null);
+  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [copied, setCopied] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/instance/oauth-settings", { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error ?? "Could not load OAuth settings");
+        if (active) {
+          setProviders(data.providers);
+          setLoadFailed(false);
+        }
+      })
+      .catch((cause) => {
+        if (!active) return;
+        setLoadFailed(true);
+        setNotice({
+          kind: "error",
+          text: cause instanceof Error ? cause.message : "Could not load OAuth settings",
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const patchProvider = (provider: OAuthProviderName, next: OAuthProviderState) => {
+    setProviders((current) => (current ? { ...current, [provider]: next } : current));
+    setDrafts((current) => ({
+      ...current,
+      [provider]: { clientId: "", clientSecret: "" },
+    }));
+    router.refresh();
+  };
+
+  const save = async (provider: OAuthProviderName) => {
+    const current = providers?.[provider];
+    if (!current || current.locked) return;
+    const clientId = drafts[provider].clientId.trim();
+    const clientSecret = drafts[provider].clientSecret.trim();
+    if (!clientId && !clientSecret) {
+      setNotice({ kind: "error", text: "Enter a client ID or a replacement secret first." });
+      return;
+    }
+    const replacesSavedValue =
+      current.status === "unavailable" ||
+      (Boolean(clientId) && current.clientIdConfigured) ||
+      (Boolean(clientSecret) && current.clientSecretConfigured);
+    if (
+      replacesSavedValue &&
+      !confirm(
+        `Replace the saved ${OAUTH_COPY[provider].title} credential? ${OAUTH_COPY[provider].impact}`
+      )
+    ) {
+      return;
+    }
+    setWorking(provider);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/instance/oauth-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          action: "save",
+          ...(clientId ? { clientId } : {}),
+          ...(clientSecret ? { clientSecret } : {}),
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Could not save OAuth settings");
+      patchProvider(provider, data.provider);
+      setNotice({
+        kind: "ok",
+        text: `${OAUTH_COPY[provider].title} credentials saved. They are not verified until an OAuth flow completes successfully.`,
+      });
+    } catch (cause) {
+      setNotice({
+        kind: "error",
+        text: cause instanceof Error ? cause.message : "Could not save OAuth settings",
+      });
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const clear = async (provider: OAuthProviderName) => {
+    const current = providers?.[provider];
+    if (!current || current.locked) return;
+    if (
+      !confirm(
+        `Clear the managed ${OAUTH_COPY[provider].title} credential? ${OAUTH_COPY[provider].impact}`
+      )
+    ) {
+      return;
+    }
+    setWorking(provider);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/instance/oauth-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, action: "clear", confirm: true }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Could not clear OAuth settings");
+      patchProvider(provider, data.provider);
+      setNotice({ kind: "ok", text: `${OAUTH_COPY[provider].title} credentials cleared.` });
+    } catch (cause) {
+      setNotice({
+        kind: "error",
+        text: cause instanceof Error ? cause.message : "Could not clear OAuth settings",
+      });
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const copyCallback = async (key: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(key);
+      window.setTimeout(() => setCopied(""), 2000);
+    } catch {
+      setNotice({
+        kind: "error",
+        text: "Copy was blocked by the browser. Select the callback URL and copy it manually.",
+      });
+    }
+  };
+
+  const statusText = (provider: OAuthProviderState) => {
+    if (provider.status === "verified") return "Verified";
+    if (provider.status === "configured-not-verified") return "Saved, not verified";
+    if (provider.status === "incomplete") return "Incomplete credential";
+    if (provider.status === "unavailable") return "Managed secrets unavailable";
+    return "Not configured";
+  };
+
+  return (
+    <Section title="Integrations">
+      <div>
+        <p className="text-sm text-[var(--muted)]">
+          Configure the OAuth apps used by this whole Keel server. A saved secret is
+          write-only: Keel never sends it back to the browser or puts it in the activity
+          log. Managed secrets are encrypted using a host key kept outside the database.
+        </p>
+        <p className="mt-1 text-xs text-[var(--faint)]">
+          Saving applies to new sign-in and connection attempts immediately. It confirms
+          only that both values are present. Complete one of the test flows below to prove
+          the provider accepts them.
+        </p>
+      </div>
+
+      {notice && (
+        <p
+          role={notice.kind === "error" ? "alert" : "status"}
+          className={`rounded border px-3 py-2 text-sm ${
+            notice.kind === "error"
+              ? "border-[var(--danger-border)] bg-[var(--danger-bg)] text-[var(--danger)]"
+              : "border-[var(--border)] bg-[var(--panel)]"
+          }`}
+        >
+          {notice.text}
+        </p>
+      )}
+
+      {!providers ? (
+        <p className="text-sm text-[var(--faint)]">
+          {loadFailed
+            ? "Integration settings are unavailable. Reload this page to try again."
+            : "Loading integration settings..."}
+        </p>
+      ) : (
+        (["google", "microsoft"] as const).map((name) => {
+          const provider = providers[name];
+          const meta = OAUTH_COPY[name];
+          const draft = drafts[name];
+          const busyProvider = working === name;
+          const needsClientId =
+            provider.status === "unavailable" || !provider.clientIdConfigured;
+          const needsClientSecret =
+            provider.status === "unavailable" || !provider.clientSecretConfigured;
+          const clientIdEntered = Boolean(draft.clientId.trim());
+          const clientSecretEntered = Boolean(draft.clientSecret.trim());
+          const hasChanges = clientIdEntered || clientSecretEntered;
+          const canSave =
+            hasChanges &&
+            (!needsClientId || clientIdEntered) &&
+            (!needsClientSecret || clientSecretEntered);
+          const replacesSavedValue =
+            provider.status === "unavailable" ||
+            (clientIdEntered && provider.clientIdConfigured) ||
+            (clientSecretEntered && provider.clientSecretConfigured);
+          return (
+            <div key={name} className="rounded border border-[var(--border-soft)] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 className="font-medium">{meta.title}</h3>
+                  <p className="text-xs text-[var(--muted)]">{meta.purpose}</p>
+                </div>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                    provider.status === "verified"
+                      ? "bg-[var(--success-bg,#e6f4ea)] text-[var(--success,#137333)]"
+                      : provider.status === "incomplete" || provider.status === "unavailable"
+                        ? "bg-[var(--danger-bg)] text-[var(--danger)]"
+                        : "bg-[var(--hover)] text-[var(--muted)]"
+                  }`}
+                >
+                  {statusText(provider)}
+                </span>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                <p className="text-xs font-medium text-[var(--muted)]">
+                  Add these exact callback URLs to the provider&apos;s web application:
+                </p>
+                {Object.entries(provider.callbacks).map(([callbackName, callback]) => {
+                  const copyKey = `${name}:${callbackName}`;
+                  return (
+                    <div key={callbackName}>
+                      <p className="mb-1 text-xs text-[var(--faint)]">
+                        {meta.callbackLabels[callbackName] ?? callbackName}
+                      </p>
+                      <div className="flex items-stretch gap-2">
+                        <code className="min-w-0 flex-1 overflow-x-auto rounded border border-[var(--border)] bg-[var(--hover)] px-3 py-2 text-xs">
+                          {callback}
+                        </code>
+                        <button
+                          type="button"
+                          aria-label={`Copy ${meta.title} ${meta.callbackLabels[callbackName] ?? callbackName}`}
+                          onClick={() => copyCallback(copyKey, callback)}
+                          className="rounded border border-[var(--border)] px-3 text-xs hover:bg-[var(--hover)]"
+                        >
+                          {copied === copyKey ? "Copied" : "Copy"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {provider.locked ? (
+                <p className="mt-3 rounded border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">
+                  🔒 This provider is controlled by server environment variables. Its
+                  credential cannot be viewed or changed in the browser.
+                </p>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="block text-xs text-[var(--muted)]">
+                      Client ID
+                      <input
+                        aria-label={`${meta.title} client ID`}
+                        value={draft.clientId}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [name]: { ...current[name], clientId: event.target.value },
+                          }))
+                        }
+                        autoComplete="off"
+                        placeholder={
+                          provider.clientIdConfigured
+                            ? "Saved. Enter only to replace"
+                            : "Paste the client ID"
+                        }
+                        className="mt-1 w-full rounded border border-[var(--border)] bg-[var(--elevated)] px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </label>
+                    <label className="block text-xs text-[var(--muted)]">
+                      Client secret
+                      <input
+                        aria-label={`${meta.title} client secret`}
+                        type="password"
+                        value={draft.clientSecret}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [name]: { ...current[name], clientSecret: event.target.value },
+                          }))
+                        }
+                        autoComplete="new-password"
+                        placeholder={
+                          provider.clientSecretConfigured
+                            ? "Saved. Enter only to replace"
+                            : "Paste the client secret"
+                        }
+                        className="mt-1 w-full rounded border border-[var(--border)] bg-[var(--elevated)] px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </label>
+                  </div>
+                  <p className="text-xs text-[var(--faint)]">
+                    Blank fields keep an existing managed value. Saved secrets are never
+                    filled back into this form.
+                  </p>
+                  {(needsClientId || needsClientSecret) && (
+                    <p className="text-xs text-[var(--muted)]">
+                      {provider.status === "unavailable"
+                        ? "The saved credential cannot be decrypted. Enter both values to replace and repair it."
+                        : needsClientId && needsClientSecret
+                          ? "Enter both values for the first save."
+                          : `Enter the missing ${needsClientId ? "client ID" : "client secret"} to complete this credential.`}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => save(name)}
+                      disabled={busyProvider || !canSave}
+                      className="rounded bg-[var(--btn-bg)] px-4 py-2 text-sm font-medium text-[var(--btn-fg)] hover:bg-[var(--btn-hover)] disabled:opacity-50"
+                    >
+                      {busyProvider
+                        ? "Saving..."
+                        : replacesSavedValue
+                          ? "Save replacement"
+                          : provider.clientIdConfigured || provider.clientSecretConfigured
+                            ? "Complete credential"
+                            : "Save credential"}
+                    </button>
+                    {provider.source === "managed" && (
+                      <button
+                        type="button"
+                        onClick={() => clear(name)}
+                        disabled={busyProvider}
+                        className="rounded border border-[var(--danger-border)] px-3 py-2 text-sm text-[var(--danger)] hover:bg-[var(--danger-bg)] disabled:opacity-50"
+                      >
+                        Clear managed credential
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {provider.configured && (
+                <div className="mt-4 border-t border-[var(--border-soft)] pt-3">
+                  <p className="text-xs text-[var(--muted)]">
+                    {provider.verified
+                      ? `Verified by a successful provider authorization${provider.verifiedAt ? ` on ${new Date(provider.verifiedAt).toLocaleString()}` : ""}. Run a connection flow again whenever you want to recheck it.`
+                      : meta.verificationNote}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {Object.entries(provider.testPaths).map(([testName, testPath]) => (
+                      <a
+                        key={testName}
+                        href={testPath}
+                        className="rounded border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--hover)]"
+                      >
+                        {meta.testLabels[testName] ?? `Test ${testName}`}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })
+      )}
+
+      <p className="border-t border-[var(--border-soft)] pt-3 text-xs text-[var(--faint)]">
+        Database location, host storage roots, network binding, reverse-proxy trust,
+        cookie and WebAuthn identity, and service supervision remain terminal-only. A
+        browser mistake in those settings could disconnect Keel or weaken a host security
+        boundary.
+      </p>
+    </Section>
+  );
 }
 
 export interface OneNoteStatus {
@@ -206,11 +649,17 @@ export default function SettingsClient({
   access,
   schema = null,
   isInstanceOwner = false,
+  claimRequired = false,
   theme = "system",
   hasPassword = true,
 }: {
   workspace: WorkspaceSettings;
-  account: { username: string };
+  account: {
+    username: string;
+    email: string;
+    googleLinked: boolean;
+    googleLinkResult: string | null;
+  };
   backups: BackupFile[];
   members: MemberDTO[];
   invites: InviteDTO[];
@@ -222,6 +671,8 @@ export default function SettingsClient({
   /** Runs the server. Gates instance-wide controls (allowlist, tunnel) - which
    *  is NOT the same as owning a workspace, since every account owns one. */
   isInstanceOwner?: boolean;
+  /** A global unclaimed state. Commands are generic and reveal no host path. */
+  claimRequired?: boolean;
   /** Saved theme, read from the cookie on the server. */
   theme?: Theme;
   /** False for Google-only accounts, which have no password to change. */
@@ -261,6 +712,71 @@ export default function SettingsClient({
   const [newPassword, setNewPassword] = useState("");
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [auditEvents, setAuditEvents] = useState<AuditEntry[] | null>(null);
+  const [googleLinkWorking, setGoogleLinkWorking] = useState(false);
+
+  const googleLinkMessage = (() => {
+    switch (account.googleLinkResult) {
+      case "linked":
+        return {
+          kind: "ok" as const,
+          text: "Google sign-in is now linked. Your password and security keys are unchanged.",
+        };
+      case "already-linked":
+        return { kind: "ok" as const, text: "Google sign-in was already linked." };
+      case "cancelled":
+        return { kind: "warn" as const, text: "Google account linking was cancelled." };
+      case "email-mismatch":
+        return {
+          kind: "error" as const,
+          text: `Google did not link because its verified email must exactly match ${account.email}. Choose the matching Google account and try again.`,
+        };
+      case "conflict":
+        return {
+          kind: "error" as const,
+          text: "That Google identity is already linked to another Keel account, or this account already uses a different Google identity.",
+        };
+      case "expired":
+        return {
+          kind: "error" as const,
+          text: "The secure Google link request expired. Start a new request below.",
+        };
+      case "rate-limited":
+        return {
+          kind: "error" as const,
+          text: "Too many Google link attempts. Wait a few minutes and try again.",
+        };
+      case "failed":
+        return {
+          kind: "error" as const,
+          text: "Google account linking could not be completed. Start again from Settings.",
+        };
+      default:
+        return null;
+    }
+  })();
+
+  const linkGoogleAccount = async () => {
+    setGoogleLinkWorking(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/account/google/link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || typeof data.authorizationUrl !== "string") {
+        throw new Error(data.error ?? "Could not start Google account linking");
+      }
+      window.location.assign(data.authorizationUrl);
+    } catch (cause) {
+      setGoogleLinkWorking(false);
+      say(
+        "error",
+        cause instanceof Error ? cause.message : "Could not start Google account linking"
+      );
+    }
+  };
 
   const loadSessions = useCallback(() => {
     fetch("/api/account/sessions")
@@ -349,13 +865,17 @@ export default function SettingsClient({
     const data = await res.json().catch(() => ({}));
     setBusy(false);
     if (res.ok) {
-      setAllowedEmails(data.access?.allowedEmails ?? allowedEmails);
-      setSignupDisabled(data.access?.signupDisabled ?? signupDisabled);
+      const savedAllowed = data.access?.allowedEmails ?? allowedEmails;
+      const savedDisabled = data.access?.signupDisabled ?? signupDisabled;
+      setAllowedEmails(savedAllowed);
+      setSignupDisabled(savedDisabled);
       say(
         "ok",
-        allowedEmails.length > 0
-          ? "Access saved - only the listed accounts can sign in now."
-          : "Access saved."
+        savedDisabled
+          ? "Registration is closed. Existing accounts can still sign in."
+          : savedAllowed.length > 0
+            ? "Registration is open only to the listed email addresses."
+            : "Registration is open. Anyone who can reach this server may create an account."
       );
     } else {
       say("error", data.error ?? "Could not save access settings");
@@ -459,7 +979,7 @@ export default function SettingsClient({
 
   const backupNow = async () => {
     let passphrase: string | undefined;
-    if (encrypt && !workspace.hasEnvPassphrase) {
+    if (encrypt && !workspace.hasScheduledPassphrase) {
       passphrase = (await askPassphrase("Encryption passphrase for this backup")) ?? undefined;
       if (!passphrase) return;
     }
@@ -476,7 +996,7 @@ export default function SettingsClient({
       setBackups(data.backups ?? []);
       say(
         "ok",
-        `Backup written to ${data.file}${data.cloud ? ` and uploaded to ${data.cloud}` : ""}`
+        `Backup ${data.file} written${data.cloud ? ` and uploaded to ${data.cloud}` : ""}`
       );
       if (data.cloud) router.refresh();
     } else {
@@ -899,6 +1419,12 @@ export default function SettingsClient({
         </div>
       )}
 
+      {claimRequired && (
+        <div className="mb-8">
+          <InstanceClaimInstructions />
+        </div>
+      )}
+
       <Section title="Appearance">
         <div>
           <p className="text-sm text-[var(--muted)] mb-2">
@@ -947,6 +1473,56 @@ export default function SettingsClient({
             </button>
           </div>
         </label>
+
+        <div className="border-t border-[var(--border-soft)] pt-4">
+          <h3 className="text-sm font-medium">Google sign-in</h3>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Add Google as another sign-in method for <strong>{account.email}</strong>.
+            Keel links only after this signed-in session completes a one-time Google
+            authorization. It never chooses an account from an email lookup.
+          </p>
+          <p className="mt-1 text-xs text-[var(--faint)]">
+            The verified Google email must match this account exactly. Linking changes
+            neither your password nor your security-key requirement.
+          </p>
+
+          {googleLinkMessage && (
+            <p
+              role={googleLinkMessage.kind === "ok" ? "status" : "alert"}
+              className={`mt-3 rounded border px-3 py-2 text-sm ${
+                googleLinkMessage.kind === "ok"
+                  ? "border-[var(--border)] bg-[var(--panel)]"
+                  : googleLinkMessage.kind === "warn"
+                    ? "border-[var(--opt-yellow-fg)] bg-[var(--opt-yellow-bg)] text-[var(--opt-yellow-fg)]"
+                    : "border-[var(--danger-border)] bg-[var(--danger-bg)] text-[var(--danger)]"
+              }`}
+            >
+              {googleLinkMessage.text}
+            </p>
+          )}
+
+          {account.googleLinked ? (
+            <p className="mt-3 text-sm text-[var(--muted)]">
+              ✓ Google sign-in is linked to this account.
+            </p>
+          ) : cloud.googleReady ? (
+            <button
+              type="button"
+              onClick={linkGoogleAccount}
+              disabled={googleLinkWorking}
+              className="mt-3 rounded bg-[var(--btn-bg)] px-4 py-2 text-sm font-medium text-[var(--btn-fg)] hover:bg-[var(--btn-hover)] disabled:opacity-50"
+            >
+              {googleLinkWorking ? "Opening Google..." : "Link Google sign-in"}
+            </button>
+          ) : (
+            <p className="mt-3 text-sm text-[var(--faint)]">
+              Google sign-in is not configured on this server.
+              {isInstanceOwner
+                ? " Add the client ID and secret under Integrations below first."
+                : " Ask the instance owner to configure it."}
+            </p>
+          )}
+        </div>
       </Section>
 
       <Section title="Password">
@@ -1223,29 +1799,53 @@ export default function SettingsClient({
       )}
 
       {access && (
-        <Section title="Access control (private instance)">
+        <Section title="Registration and sign-in">
           <p className="text-sm text-[var(--muted)]">
-            Keel is meant for <strong>you</strong>, not the public. List the Google
-            account(s) allowed to sign in and turn off new sign-ups -{" "}
-            <strong>do this before exposing Keel over the internet</strong> (Cloudflare
-            Tunnel), so only your account can reach it. An empty list means anyone who can
-            register may sign in.
+            Registration is open by default. Keep it open when you want other people to
+            create accounts, or turn it off when this server has everyone it needs. Use an
+            allowlist when only specific email addresses should be able to register or sign
+            in. <strong>Set both controls before exposing Keel to the public internet.</strong>
           </p>
 
-          {access.envLocked && (
+          <div className="rounded border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm">
+            <span className="font-medium">Current state: </span>
+            {signupDisabled ? (
+              <span>
+                Closed. No new accounts can be created. Existing accounts
+                {allowedEmails.length > 0 ? " must also be on the allowlist" : " may still sign in"}.
+              </span>
+            ) : allowedEmails.length > 0 ? (
+              <span>
+                Restricted. New and existing accounts must use one of the listed email
+                addresses.
+              </span>
+            ) : (
+              <span>
+                Open. Anyone who can reach this server may create an account and sign in.
+              </span>
+            )}
+          </div>
+
+          {access.allowedEmailsLocked && (
             <p className="rounded border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">
-              🔒 Access is currently enforced by environment variables
-              (<code>KEEL_ALLOWED_EMAILS</code> / <code>KEEL_DISABLE_SIGNUP</code>), so
-              these controls are read-only. Remove those from <code>.env</code> to manage
-              access here instead.
+              🔒 The allowlist is enforced by <code>KEEL_ALLOWED_EMAILS</code>. Remove that
+              variable and restart Keel to manage the list here.
+            </p>
+          )}
+
+          {access.signupLocked && (
+            <p className="rounded border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">
+              🔒 The registration switch is enforced by <code>KEEL_DISABLE_SIGNUP</code>.
+              Remove that variable and restart Keel to manage registration here.
             </p>
           )}
 
           <div>
-            <span className="text-sm text-[var(--muted)]">Allowed Google accounts</span>
+            <span className="text-sm text-[var(--muted)]">Allowed accounts</span>
             {allowedEmails.length === 0 ? (
               <p className="text-xs text-[var(--faint)] mt-1">
-                No allowlist - anyone who can register can sign in.
+                No allowlist. Every existing account may sign in; the registration switch
+                separately controls whether new accounts can be created.
               </p>
             ) : (
               <ul className="mt-1 flex flex-wrap gap-2">
@@ -1255,7 +1855,7 @@ export default function SettingsClient({
                     className="flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--elevated)] pl-3 pr-1.5 py-1 text-xs"
                   >
                     <span className="font-mono">{e}</span>
-                    {!access.envLocked && (
+                    {!access.allowedEmailsLocked && (
                       <button
                         onClick={() => setAllowedEmails(allowedEmails.filter((x) => x !== e))}
                         className="rounded-full w-4 h-4 leading-none text-[var(--faint)] hover:text-[var(--danger)]"
@@ -1268,7 +1868,7 @@ export default function SettingsClient({
                 ))}
               </ul>
             )}
-            {!access.envLocked && (
+            {!access.allowedEmailsLocked && (
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <input
                   type="email"
@@ -1301,15 +1901,19 @@ export default function SettingsClient({
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
-              checked={signupDisabled}
-              onChange={(e) => setSignupDisabled(e.target.checked)}
-              disabled={access.envLocked}
+              checked={!signupDisabled}
+              onChange={(e) => setSignupDisabled(!e.target.checked)}
+              disabled={access.signupLocked}
               className="h-4 w-4 accent-blue-600"
             />
-            Disable new sign-ups (recommended once your account exists)
+            Allow new registrations
           </label>
+          <p className="text-xs text-[var(--faint)]">
+            This switch affects new accounts only. The allowlist also controls existing
+            sign-in. A password registration does not prove ownership of an email mailbox.
+          </p>
 
-          {!access.envLocked && (
+          {(!access.allowedEmailsLocked || !access.signupLocked) && (
             <button
               onClick={saveAccess}
               disabled={busy}
@@ -1320,6 +1924,10 @@ export default function SettingsClient({
           )}
         </Section>
       )}
+
+      {isInstanceOwner && <OAuthIntegrations />}
+
+      {isInstanceOwner && <OperatorSettingsPanel />}
 
       <Section title="Backups & data safety">
         <p className="text-sm text-[var(--muted)]">
@@ -1389,19 +1997,19 @@ export default function SettingsClient({
             value={dir}
             onChange={(e) => setDir(e.target.value)}
             disabled={!isOwner}
-            placeholder={workspace.backupResolvedDir}
+            placeholder={workspace.backupResolvedDir || "Leave blank to use the server default"}
             className="mt-1 w-full rounded border border-[var(--border)] bg-[var(--elevated)] px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </label>
 
-        {encrypt && !workspace.hasEnvPassphrase && (
+        {encrypt && !workspace.hasScheduledPassphrase && (
           <p className="text-xs text-[var(--danger)]">
-            Automatic encrypted backups need a server-side passphrase: add{" "}
-            <code>KEEL_BACKUP_PASSPHRASE=&quot;your passphrase&quot;</code> to the{" "}
-            <code>.env</code> file (next to <code>DATABASE_URL</code>) and restart the
-            server. The passphrase is only read from the environment at backup time -
-            Keel never stores it in the database or in backups. Manual “Back up now”
-            asks for a passphrase instead.
+            Automatic encrypted backups need a server-side passphrase.{" "}
+            {isInstanceOwner
+              ? "Save one in Scheduled backup secret above, or have the host set KEEL_BACKUP_PASSPHRASE as a locked environment override."
+              : "Ask the instance owner to configure it in Settings or on the host."}{" "}
+            Keel never puts the passphrase in a backup or sends a saved value back to the
+            browser. Manual “Back up now” asks for a passphrase instead.
           </p>
         )}
         {workspace.lastBackupError && (
@@ -1527,7 +2135,8 @@ export default function SettingsClient({
               <p className="text-sm text-[var(--muted)]">
                 Connect a cloud account and every backup is automatically uploaded off-site -
                 and can be restored from here on any machine. Keel only ever sees files it
-                created itself (Drive “app data” scope / OneDrive App Folder).
+                created itself (Google Drive <code>drive.file</code> scope / OneDrive App
+                Folder).
               </p>
               <div className="flex flex-wrap gap-2">
                 <a
@@ -1821,8 +2430,8 @@ export default function SettingsClient({
             Reach this <strong>local</strong> Keel from your phone or anywhere, without
             opening ports. A quick tunnel gives an instant public URL; a named tunnel
             serves your own domain.{" "}
-            <strong>Lock the instance down first</strong> (Access control above) so only
-            your Google account can sign in.
+            <strong>Lock the instance down first</strong> (Registration and sign-in above)
+            so only the accounts you chose can sign in.
           </p>
 
           {!tunnelAvailable && (

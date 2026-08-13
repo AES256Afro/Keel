@@ -33,6 +33,14 @@ npm run desktop:build
 The installer is unsigned, so Windows SmartScreen shows "unrecognized app"
 once - More info → Run anyway.
 
+After the instance is claimed, its owner can configure Google and Microsoft
+OAuth applications in **Settings -> Integrations**. The page provides the
+exact callback URLs and write-only client-secret fields. Managed credentials
+apply immediately and are shown as **Saved, not verified** until you complete
+a real provider flow. Environment credentials remain supported as locked
+operator overrides. Database, network, proxy, cookie, WebAuthn, filesystem,
+and service settings remain terminal-only.
+
 **Build via GitHub Actions** (easiest - no local toolchain): the
 `Desktop builds` workflow builds Windows and Linux in parallel. Trigger it
 from the repo's Actions tab (workflow_dispatch) and download the artifacts,
@@ -93,16 +101,36 @@ rebuilds automatically when needed. To force a rebuild:
 ## Docker (any OS, good for a home server / NAS)
 
 ```bash
+cp .env.example .env
 docker compose up -d --build
 ```
 
 `restart: unless-stopped` brings the container back after crashes and host
 reboots (make sure Docker Desktop / the Docker daemon starts on boot). Your
-database lives in the `keel-db` volume; backups land in `./backups` on the
-host. Set `KEEL_BACKUP_PASSPHRASE` in your shell or a `.env` file next to
-`docker-compose.yml` for automatic encrypted backups.
+database lives in the logical `keel-data` Compose volume; Docker scopes its
+engine name to the project, commonly `keel_keel-data`. Backups land in
+`./backups` on the host. The claimed owner can save a write-only automatic
+backup passphrase in Settings; a nonempty `KEEL_BACKUP_PASSPHRASE` in `.env`
+is the locked host override. Compose 2.30 or newer reads the application env file in raw
+mode, so `$` characters in secrets remain literal and do not need doubling.
 
-Update: `git pull && docker compose up -d --build`.
+The host port binds only to `127.0.0.1` by default. Change the host-side port
+with `KEEL_HOST_PORT`, or put Tailscale Serve or another deliberate ingress in
+front of the loopback socket. Registration starts open. Register the intended
+account, generate a one-use token from **Claim this server**, and run the exact
+command Keel shows:
+
+```bash
+docker compose exec --user root -e KEEL_CONTAINER_CLAIM=1 keel npm run claim -- 'one-use-token'
+```
+
+On Docker Desktop, use that command from a terminal with daemon access. On a
+Linux Docker host, first run `sudo -k`, then prefix the Docker command with
+`sudo`. This one command runs as container root to prove Docker-daemon control;
+the Keel service itself remains the image's unprivileged `node` user. Claiming
+does not close registration. The new owner chooses that policy in Settings.
+
+Update: `git pull --ff-only && docker compose up -d --build`.
 
 ## Linux (systemd)
 
@@ -135,12 +163,13 @@ Build once first (`npm install && npm run build`) and rebuild after updates.
 
 ## Locking Keel down before you expose it
 
-Keel is a **single-owner** app. Before putting it on the internet (Cloudflare
-Tunnel, a VPS, or any public host), restrict who can sign in - otherwise anyone
-who finds the URL could register.
+Keel has one instance owner and can share individual workspaces with members.
+Before putting it on the internet (Cloudflare Tunnel, a VPS, or any public
+host), restrict who can sign in - otherwise anyone who finds the URL could
+register.
 
-- **Settings → Access control (private instance)** - add your own Google
-  account(s) to the allowlist and turn on *Disable new sign-ups*. Only listed
+- **Settings -> Registration and sign-in (private instance)** - add your own
+  account(s) to the allowlist and turn off *Allow new registrations*. Only listed
   accounts can then authenticate (password or Google); everyone else is refused.
 - **Environment lock** (can't be changed from the web UI, best for servers):
 
@@ -149,8 +178,15 @@ who finds the URL could register.
   KEEL_DISABLE_SIGNUP=1
   ```
 
-  When set, these win over the in-app settings and the UI shows them read-only -
-  so a stolen session can never widen access.
+  Each variable wins over its matching in-app field, which becomes read-only.
+  The other field remains editable unless its variable is also set. This keeps
+  a stolen session from widening the server-enforced boundary.
+
+  Create the administrator account over localhost, a private connection, or
+  verified Google sign-in before enabling the hard signup stop. An allowlisted
+  email address alone is not proof that a password-registration visitor owns
+  that mailbox. `KEEL_DISABLE_SIGNUP=1` blocks every new account without
+  exception.
 
 ## Notes
 

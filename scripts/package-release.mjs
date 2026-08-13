@@ -14,6 +14,10 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import {
+  assertNoSensitiveArtifactPaths,
+  scrubSensitiveArtifactPaths,
+} from "./artifact-safety.mjs";
 
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -79,11 +83,17 @@ for (const junk of [
 ]) {
   fs.rmSync(path.join(server, junk), { recursive: true, force: true });
 }
+scrubSensitiveArtifactPaths(server);
 
 // 3. The CLI and its package manifest.
 fs.mkdirSync(path.join(out, "bin"), { recursive: true });
 fs.copyFileSync(path.join(root, "bin", "keel.mjs"), path.join(out, "bin", "keel.mjs"));
 fs.chmodSync(path.join(out, "bin", "keel.mjs"), 0o755);
+fs.mkdirSync(path.join(out, "scripts"), { recursive: true });
+fs.copyFileSync(
+  path.join(root, "scripts", "claim-instance.mjs"),
+  path.join(out, "scripts", "claim-instance.mjs")
+);
 
 fs.writeFileSync(
   path.join(out, "package.json"),
@@ -121,10 +131,15 @@ Or install the CLI on your PATH:
 
     npm install -g .
 
-Then \`keel start\`, \`keel status\`, \`keel stop\`, \`keel update\`, and
-\`keel help\` for the rest. Your data lives in ~/.keel by default.
+Then \`keel start\`, register an account, generate a five-minute claim token in
+Keel, and run \`keel claim <token>\` to confirm instance ownership. \`keel help\`
+lists status, stop, update, export, and the rest. Your data lives in ~/.keel.
 `
 );
+
+// Scrubbing is defense in depth. The independent scan fails closed if tracing,
+// a later copy step, or a new secret location escapes it.
+assertNoSensitiveArtifactPaths(out, "release");
 
 // 4. Tarball for the GitHub release / Homebrew.
 run(`tar -czf ${JSON.stringify(path.join(dist, `${name}.tar.gz`))} -C ${JSON.stringify(dist)} ${JSON.stringify(name)}`);

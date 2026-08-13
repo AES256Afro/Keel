@@ -14,8 +14,10 @@ const worker = {
     const url = new URL(request.url);
     const hostname = (request.headers.get("host") ?? url.hostname).split(":")[0].toLowerCase();
 
-    if (hostname === "www.keelnotes.com") {
-      url.hostname = "keelnotes.com";
+    if (url.protocol !== "https:" || hostname === "www.keelnotes.com") {
+      url.protocol = "https:";
+      url.port = "";
+      if (hostname === "www.keelnotes.com") url.hostname = "keelnotes.com";
       return Response.redirect(url.toString(), 301);
     }
 

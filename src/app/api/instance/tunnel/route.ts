@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireInstanceOwner, handleApiError, ApiError } from "@/lib/api";
 import { cloudflaredAvailable, startTunnel, stopTunnel, tunnelState } from "@/lib/tunnel";
 import { audit } from "@/lib/audit";
+import { requireJsonRequest, requireSameOriginMutation } from "@/lib/same-origin";
 
 export const runtime = "nodejs";
 
@@ -17,6 +18,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const ctx = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Change tunnel settings from Keel Settings");
+    requireJsonRequest(req, "Tunnel requests must use application/json");
     const b = await req.json().catch(() => ({}));
     const mode = b.mode === "named" ? "named" : "quick";
     const token = b.token ? String(b.token).trim() : "";
@@ -34,9 +37,10 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
   try {
     const ctx = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Change tunnel settings from Keel Settings");
     const state = stopTunnel();
     await audit("tunnel.stop", ctx.user);
     return NextResponse.json({ state });

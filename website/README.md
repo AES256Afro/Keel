@@ -23,5 +23,5 @@ npm run site:deploy
 ```
 
 The Worker config attaches `keelnotes.com` and `www.keelnotes.com` as custom
-domains. The `www` hostname redirects to the apex. Security headers are added
-by the Worker before every static-asset response.
+domains. Plain HTTP redirects to HTTPS, and the `www` hostname redirects to the
+apex. Security headers are added by the Worker before every static-asset response.

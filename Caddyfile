@@ -1,8 +1,11 @@
 # Caddy reverse proxy for Keel - automatic HTTPS + gzip.
 #
-# KEEL_DOMAINS (in .env.prod) is a space-separated list of every hostname this
+# KEEL_DOMAINS (in .env.caddy) is a space-separated list of every hostname this
 # server answers, for example:
-#   KEEL_DOMAINS="notes.example.com"
+#   KEEL_DOMAINS=notes.example.com
+# Keep application credentials in .env.prod. The Compose stack deliberately
+# gives this proxy only .env.caddy so a Caddy compromise cannot read OAuth,
+# database, backup, or replication secrets from its process environment.
 # The app itself decides which host shows the site vs the notebook, via
 # KEEL_SITE_HOSTS (see src/proxy.ts). Caddy obtains/renews Let's Encrypt certs
 # for all of them automatically.

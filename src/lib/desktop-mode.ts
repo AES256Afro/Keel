@@ -12,9 +12,8 @@
 // Keel is reachable by someone else, these endpoints are simply not there.
 
 import type { NextRequest } from "next/server";
-import { keelFlag } from "@/lib/env";
 
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
 /** Strip the port (and IPv6 brackets) from a Host / X-Forwarded-Host value. */
 function hostnameOf(value: string): string {
@@ -27,7 +26,6 @@ function isLoopbackAddress(value: string): boolean {
   return (
     v === "::1" ||
     v === "localhost" ||
-    v === "0.0.0.0" ||
     v.startsWith("127.") ||
     // IPv4-mapped IPv6, e.g. ::ffff:127.0.0.1
     /^::ffff:127\./.test(v)
@@ -35,10 +33,10 @@ function isLoopbackAddress(value: string): boolean {
 }
 
 export function isDesktopHandoffAllowed(req: NextRequest): boolean {
-  // The Electron shell sets this when it spawns the bundled server, so a
-  // custom PORT/hostname setup still works.
-  if (keelFlag("DESKTOP_HANDOFF")) return true;
-
+  // KEEL_DESKTOP_HANDOFF identifies a server spawned by Electron elsewhere in
+  // the app, but it is not a network authorization signal. Environment flags
+  // are easy to copy into a public deployment, so every request must still
+  // prove that it arrived entirely over loopback.
   if (!LOOPBACK_HOSTS.has(hostnameOf(req.headers.get("host") ?? ""))) return false;
 
   // `next start` synthesizes x-forwarded-* for every request, so their mere

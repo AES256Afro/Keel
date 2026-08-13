@@ -140,6 +140,158 @@ const schemaMigrateHref = pathToFileURL(path.join(root, "src/lib/schema-migrate.
 const { ensureSchema, schemaStatus } = await import(schemaMigrateHref);
 
 try {
+  console.log("\nInstance-owner claim compatibility migration\n");
+  {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "keel-owner-claim-migration-")));
+    const migrationSql = fs.readFileSync(
+      path.join(root, "prisma", "migrations", "20260813000002_instance_owner_claim", "migration.sql"),
+      "utf8"
+    );
+    const runMigration = (file) =>
+      spawnSync("sqlite3", ["-bail", file], { input: migrationSql, encoding: "utf8" });
+    const createTables = (file) =>
+      sqlAt(
+        file,
+        `CREATE TABLE "AppSetting" ("key" TEXT PRIMARY KEY NOT NULL, "value" TEXT NOT NULL, "updatedAt" DATETIME NOT NULL);
+         CREATE TABLE "Workspace" ("id" TEXT PRIMARY KEY NOT NULL, "ownerId" TEXT NOT NULL, "createdAt" DATETIME NOT NULL);`
+      );
+    try {
+      const fresh = path.join(dir, "fresh.db");
+      createTables(fresh);
+      const freshResult = runMigration(fresh);
+      check("a fresh empty database remains unclaimed", freshResult.status === 0 && sqlAt(fresh, `SELECT COUNT(*) FROM "AppSetting";`) === "0");
+
+      const single = path.join(dir, "single.db");
+      createTables(single);
+      sqlAt(
+        single,
+        `INSERT INTO "Workspace" ("id", "ownerId", "createdAt") VALUES
+         ('a', 'only-user', '2026-01-01 00:00:00'),
+         ('b', 'only-user', '2026-01-02 00:00:00');`
+      );
+      const singleResult = runMigration(single);
+      check(
+        "a single-user legacy instance preserves its only possible owner",
+        singleResult.status === 0 &&
+          sqlAt(single, `SELECT "value" FROM "AppSetting" WHERE "key"='instance.ownerUserId';`) === "only-user"
+      );
+
+      const multi = path.join(dir, "multi.db");
+      createTables(multi);
+      sqlAt(
+        multi,
+        `INSERT INTO "Workspace" ("id", "ownerId", "createdAt") VALUES
+         ('z', 'second-user', '2026-01-01 00:00:00'),
+         ('a', 'first-user', '2026-01-01 00:00:00');`
+      );
+      const multiResult = runMigration(multi);
+      check(
+        "a multi-user legacy instance stays unclaimed instead of guessing the operator",
+        multiResult.status === 0 &&
+          sqlAt(multi, `SELECT COUNT(*) FROM "AppSetting" WHERE "key"='instance.ownerUserId';`) === "0"
+      );
+
+      const claimed = path.join(dir, "claimed.db");
+      createTables(claimed);
+      sqlAt(
+        claimed,
+        `INSERT INTO "Workspace" ("id", "ownerId", "createdAt") VALUES ('a', 'oldest-user', '2025-01-01');
+         INSERT INTO "AppSetting" ("key", "value", "updatedAt") VALUES ('instance.ownerUserId', 'explicit-user', CURRENT_TIMESTAMP);`
+      );
+      const claimedResult = runMigration(claimed);
+      check(
+        "the compatibility migration never replaces an explicit claim",
+        claimedResult.status === 0 &&
+          sqlAt(claimed, `SELECT "value" FROM "AppSetting" WHERE "key"='instance.ownerUserId';`) === "explicit-user"
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  console.log("\nGoogle identity uniqueness migration fails closed\n");
+  {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "keel-google-id-migration-")));
+    const migrationSql = fs.readFileSync(
+      path.join(
+        root,
+        "prisma",
+        "migrations",
+        "20260813000001_google_identity_unique",
+        "migration.sql"
+      ),
+      "utf8"
+    );
+    const runMigration = (file) =>
+      spawnSync("sqlite3", ["-bail", file], { input: migrationSql, encoding: "utf8" });
+    const createUserTable = (file) =>
+      sqlAt(file, 'CREATE TABLE "User" ("id" TEXT PRIMARY KEY NOT NULL, "googleId" TEXT);');
+
+    try {
+      const empty = path.join(dir, "empty.db");
+      createUserTable(empty);
+      const emptyResult = runMigration(empty);
+      check(
+        "an empty User table accepts the Google identity constraint",
+        emptyResult.status === 0,
+        emptyResult.stderr.trim()
+      );
+      check(
+        "the empty migration creates the unique index",
+        sqlAt(empty, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='User_googleId_key';`) === "1"
+      );
+
+      const normal = path.join(dir, "normal.db");
+      createUserTable(normal);
+      sqlAt(
+        normal,
+        `INSERT INTO "User" ("id", "googleId") VALUES
+         ('a', 'google-subject-a'), ('b', 'google-subject-b'), ('c', NULL);`
+      );
+      const normalResult = runMigration(normal);
+      check(
+        "distinct and null Google links migrate normally",
+        normalResult.status === 0,
+        normalResult.stderr.trim()
+      );
+      check(
+        "the normal migration preserves every link",
+        sqlAt(normal, `SELECT COUNT(*) FROM "User";`) === "3" &&
+          sqlAt(normal, `SELECT COUNT(*) FROM "User" WHERE "googleId" IS NOT NULL;`) === "2"
+      );
+
+      const duplicate = path.join(dir, "duplicate.db");
+      createUserTable(duplicate);
+      sqlAt(
+        duplicate,
+        `INSERT INTO "User" ("id", "googleId") VALUES
+         ('a', 'shared-google-subject'), ('b', 'shared-google-subject');`
+      );
+      const duplicateResult = runMigration(duplicate);
+      check("duplicate legacy links block the migration", duplicateResult.status !== 0);
+      check(
+        "the blocked migration gives an actionable diagnostic",
+        duplicateResult.stderr.includes(
+          "Keel migration blocked duplicate non-null User.googleId links exist resolve before upgrade"
+        ),
+        duplicateResult.stderr.trim()
+      );
+      check(
+        "the blocked migration leaves both account links untouched",
+        sqlAt(
+          duplicate,
+          `SELECT COUNT(*) FROM "User" WHERE "googleId" = 'shared-google-subject';`
+        ) === "2"
+      );
+      check(
+        "the blocked migration does not create a misleading unique index",
+        sqlAt(duplicate, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='User_googleId_key';`) === "0"
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   const user = await prisma.user.create({
     data: { email: "m@example.test", name: "M", username: "m", passwordHash: "x" },
   });

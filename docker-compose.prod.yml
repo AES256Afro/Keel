@@ -13,13 +13,23 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     restart: unless-stopped
-    env_file: .env.prod
+    # Raw parsing preserves `$` and similar characters in application secrets.
+    # The explicit environment below wins for container-only invariants.
+    env_file:
+      - path: ${KEEL_APP_ENV_FILE:-.env.prod}
+        required: true
+        format: raw
     environment:
-      - NODE_ENV=production
+      NODE_ENV: production
       # Caddy fronts Keel here, so X-Forwarded-For is trustworthy.
-      - KEEL_TRUST_PROXY=1
-      - PORT=3000
-      - DATABASE_URL=file:/data/keel.db
+      KEEL_TRUST_PROXY: "1"
+      PORT: "3000"
+      HOST: 0.0.0.0
+      HOSTNAME: 0.0.0.0
+      DATABASE_URL: file:/data/keel.db
+      KEEL_BACKUP_DIR: /data/backups
+      NOPIN_UPLOAD_DIR: /data/uploads
+      KEEL_CLAIM_REQUIRED: "1"
     volumes:
       - keel-data:/data
     expose:
@@ -30,7 +40,12 @@ services:
     restart: unless-stopped
     depends_on:
       - keel
-    env_file: .env.prod
+    # Caddy needs hostnames and nothing else. Never give the reverse proxy the
+    # application's database, OAuth, backup, or replication credentials.
+    env_file:
+      - path: ${KEEL_CADDY_ENV_FILE:-.env.caddy}
+        required: true
+        format: raw
     ports:
       - "80:80"
       - "443:443"

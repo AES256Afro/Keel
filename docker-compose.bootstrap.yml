@@ -1,0 +1,12 @@
+# Temporary loopback-only access for creating the first public-server account.
+# Use together with docker-compose.prod.yml while Caddy is stopped, then
+# recreate Keel from docker-compose.prod.yml alone to remove this host port.
+services:
+  keel:
+    environment:
+      # The secure bootstrap is reached through an SSH-forwarded localhost URL
+      # while Caddy is stopped. Restore the production compose file alone after
+      # claiming so OAuth/WebAuthn return to the public HTTPS origin.
+      KEEL_PUBLIC_URL: "http://localhost:${KEEL_BOOTSTRAP_PORT:-3000}"
+    ports:
+      - "127.0.0.1:${KEEL_BOOTSTRAP_PORT:-3000}:3000"

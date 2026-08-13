@@ -6,5 +6,5 @@ import { register } from "../actions";
 
 export default async function RegisterPage() {
   if (await getCurrentUser()) redirect("/");
-  return <AuthForm mode="register" action={register} googleEnabled={googleConfigured()} />;
+  return <AuthForm mode="register" action={register} googleEnabled={await googleConfigured()} />;
 }

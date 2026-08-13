@@ -285,13 +285,23 @@ try {
   const created = await (
     await fetch(`${BASE}/api/pages`, {
       method: "POST",
-      headers: { Cookie: `keel_session=${token}`, "Content-Type": "application/json" },
+      headers: {
+        Cookie: `keel_session=${token}`,
+        "Content-Type": "application/json",
+        Origin: BASE,
+        "Sec-Fetch-Site": "same-origin",
+      },
       body: JSON.stringify({ title: "Fresh page" }),
     })
   ).json();
   await fetch(`${BASE}/api/pages/${created.page.id}`, {
     method: "PATCH",
-    headers: { Cookie: `keel_session=${token}`, "Content-Type": "application/json" },
+    headers: {
+      Cookie: `keel_session=${token}`,
+      "Content-Type": "application/json",
+      Origin: BASE,
+      "Sec-Fetch-Site": "same-origin",
+    },
     body: JSON.stringify({ content: doc(para("A distinctive zebracorn phrase.")) }),
   });
   check("newly written content is indexed immediately", (await search("zebracorn")).length === 1);

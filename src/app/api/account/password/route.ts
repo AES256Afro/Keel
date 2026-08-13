@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword, readSessionToken } from "@/lib/auth";
 import { revokeOtherSessions } from "@/lib/sessions";
 import { audit } from "@/lib/audit";
 import { cookies } from "next/headers";
+import { ServerBusyError, withAuthWorkSlot } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -49,17 +50,21 @@ export async function PATCH(req: NextRequest) {
     if (newPassword.length > MAX_LENGTH) {
       throw new ApiError(400, "That password is too long.");
     }
-    if (!(await verifyPassword(currentPassword, user.passwordHash))) {
-      throw new ApiError(403, "That is not your current password.");
+    try {
+      await withAuthWorkSlot(async () => {
+        if (!(await verifyPassword(currentPassword, user.passwordHash!))) {
+          throw new ApiError(403, "That is not your current password.");
+        }
+        if (await verifyPassword(newPassword, user.passwordHash!)) {
+          throw new ApiError(400, "That is already your password.");
+        }
+        const passwordHash = await hashPassword(newPassword);
+        await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+      });
+    } catch (err) {
+      if (err instanceof ServerBusyError) throw new ApiError(503, err.message);
+      throw err;
     }
-    if (await verifyPassword(newPassword, user.passwordHash)) {
-      throw new ApiError(400, "That is already your password.");
-    }
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash: await hashPassword(newPassword) },
-    });
 
     const currentToken = readSessionToken(await cookies());
     const endedElsewhere = await revokeOtherSessions(user.id, currentToken);
