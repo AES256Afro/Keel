@@ -141,6 +141,86 @@ if [ -n "$OWNER_EMAIL" ]; then
   warn "--owner is accepted for older scripts but no longer selects the server owner"
 fi
 
+# Updating code, dependencies, or a SQLite schema underneath a running service
+# is unsafe and can leave Prisma blocked on the service's open database. Stop
+# only a manager entry whose configured working directory resolves to this
+# exact install. A manual process or an unrelated Keel service is never killed.
+STOPPED_MANAGED_SERVICE=""
+STOPPED_MANAGED_PLIST=""
+
+canonical_existing_dir() {
+  [ -d "$1" ] || return 1
+  (cd -- "$1" && pwd -P)
+}
+
+restart_stopped_managed_service() {
+  case "$STOPPED_MANAGED_SERVICE" in
+    launchd)
+      if ! launchctl load -w "$STOPPED_MANAGED_PLIST" >/dev/null; then
+        return 1
+      fi
+      ok "restarted the existing launchd service"
+      ;;
+    systemd)
+      if ! systemctl --user start keel.service; then
+        return 1
+      fi
+      ok "restarted the existing systemd user service"
+      ;;
+    "") return 0 ;;
+    *) return 1 ;;
+  esac
+  STOPPED_MANAGED_SERVICE=""
+  STOPPED_MANAGED_PLIST=""
+}
+
+on_installer_exit() {
+  local status
+  status="$1"
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ -n "$STOPPED_MANAGED_SERVICE" ]; then
+    warn "the update failed; attempting to restore the previously running service"
+    restart_stopped_managed_service || warn "could not restore the managed service automatically"
+  fi
+  exit "$status"
+}
+
+stop_managed_service_for_update() {
+  [ -d "$DIR/.git" ] || return 0
+  local target_dir managed_dir uid plist
+  target_dir="$(canonical_existing_dir "$DIR")" || return 0
+
+  if [ "$PLATFORM" = "macos" ]; then
+    uid="$(id -u)"
+    plist="$HOME/Library/LaunchAgents/com.keel.server.plist"
+    if launchctl print "gui/$uid/com.keel.server" >/dev/null 2>&1 &&
+       [ -f "$plist" ] && [ ! -L "$plist" ]; then
+      managed_dir="$(/usr/libexec/PlistBuddy -c 'Print :WorkingDirectory' "$plist" 2>/dev/null || true)"
+      managed_dir="$(canonical_existing_dir "$managed_dir" 2>/dev/null || true)"
+      if [ "$managed_dir" = "$target_dir" ]; then
+        launchctl bootout "gui/$uid" "$plist" >/dev/null ||
+          die "could not stop the verified launchd service before updating"
+        STOPPED_MANAGED_SERVICE="launchd"
+        STOPPED_MANAGED_PLIST="$plist"
+        ok "temporarily stopped the verified launchd service"
+      fi
+    fi
+  elif command -v systemctl >/dev/null 2>&1 &&
+       systemctl --user is-active --quiet keel.service; then
+    managed_dir="$(systemctl --user show keel.service --property=WorkingDirectory --value 2>/dev/null || true)"
+    managed_dir="$(canonical_existing_dir "$managed_dir" 2>/dev/null || true)"
+    if [ "$managed_dir" = "$target_dir" ]; then
+      systemctl --user stop keel.service ||
+        die "could not stop the verified systemd user service before updating"
+      STOPPED_MANAGED_SERVICE="systemd"
+      ok "temporarily stopped the verified systemd user service"
+    fi
+  fi
+}
+
+trap 'on_installer_exit $?' EXIT
+stop_managed_service_for_update
+
 # ------------------------------------------------------------------- fetch ---
 say "Fetching Keel"
 if [ -d "$DIR/.git" ]; then
@@ -219,7 +299,9 @@ if [ "$CREATED_ENV" != "1" ]; then
 fi
 
 say "Creating the database"
-npm run db:deploy 2>&1 | tail -3
+if ! npm run db:deploy 2>&1 | tail -20; then
+  die "database migration failed. Stop any manually started Keel process and re-run the installer."
+fi
 ok "database ready at $DATA_DIR/keel.db"
 
 say "Building"
@@ -310,12 +392,19 @@ if [ "$INSTALL_SERVICE" = "1" ]; then
   else
     warn "no systemd found - start Keel yourself with: cd $DIR && npm start"
   fi
+  # The newly installed manager has already started the service.
+  STOPPED_MANAGED_SERVICE=""
+  STOPPED_MANAGED_PLIST=""
 fi
 
 # A process that loaded the broken 1.2.1 environment must be restarted before
 # the repair can take effect. Restart a known managed service even when this
 # rerun omitted --service; otherwise provide an explicit manual handoff.
 RECOVERY_RESTARTED=0
+if [ -n "$STOPPED_MANAGED_SERVICE" ]; then
+  restart_stopped_managed_service || die "the update succeeded but the managed service could not be restarted"
+  RECOVERY_RESTARTED=1
+fi
 if [ "$RECOVERED_LEGACY_ACCESS" = "1" ] && [ "$INSTALL_SERVICE" != "1" ]; then
   if [ "$PLATFORM" = "macos" ] && launchctl print "gui/$(id -u)/com.keel.server" >/dev/null 2>&1; then
     if launchctl kickstart -k "gui/$(id -u)/com.keel.server"; then
