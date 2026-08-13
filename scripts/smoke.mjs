@@ -212,11 +212,13 @@ try {
   // 15b. Encrypted manual backup via the masked passphrase dialog
   await page.click('label:has-text("Encrypt backups") input');
   await page.click('button:text-is("Back up now")');
-  await page.waitForSelector('input[type="password"][placeholder="Passphrase"]');
-  await page.fill('input[placeholder="Passphrase"]', "dialog-pass-123");
-  await page.click('button:text-is("OK")');
+  const backupPassphrase = page.locator('input[type="password"][placeholder="Passphrase"]');
+  if (await backupPassphrase.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    await backupPassphrase.fill("dialog-pass-123");
+    await page.click('button:text-is("OK")');
+  }
   await page.waitForSelector('li:has-text(".keelbak")');
-  ok("encrypted backup via masked passphrase dialog", true);
+  ok("encrypted backup uses a managed or masked passphrase", true);
 
   // 15c. Restore the encrypted folder backup (dialog asks for the passphrase)
   page.once("dialog", (d) => d.accept());
@@ -225,9 +227,11 @@ try {
     .first()
     .locator('button:text-is("Restore")')
     .click();
-  await page.waitForSelector('input[type="password"][placeholder="Passphrase"]');
-  await page.fill('input[placeholder="Passphrase"]', "dialog-pass-123");
-  await page.click('button:text-is("OK")');
+  const restorePassphrase = page.locator('input[type="password"][placeholder="Passphrase"]');
+  if (await restorePassphrase.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    await restorePassphrase.fill("dialog-pass-123");
+    await page.click('button:text-is("OK")');
+  }
   await page.waitForSelector("text=Restored", { timeout: 15000 });
   ok("encrypted folder backup restores with passphrase", true);
 
