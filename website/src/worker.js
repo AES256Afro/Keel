@@ -12,8 +12,9 @@ const SECURITY_HEADERS = {
 const worker = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const hostname = (request.headers.get("host") ?? url.hostname).split(":")[0].toLowerCase();
 
-    if (url.hostname === "www.keelnotes.com") {
+    if (hostname === "www.keelnotes.com") {
       url.hostname = "keelnotes.com";
       return Response.redirect(url.toString(), 301);
     }
