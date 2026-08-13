@@ -1,0 +1,57 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env files
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# database
+prisma/*.db
+prisma/*.db-journal
+prisma/*.db-wal
+prisma/*.db-shm
+# Scratch databases the test scripts create at the repository root.
+/*.db
+/*.db-journal
+/*.db-wal
+/*.db-shm
+
+# typescript
+*.tsbuildinfo
+
+# Runtime output.
+#
+# LEADING SLASHES MATTER HERE. An unanchored `backups/` matches a directory of
+# that name at ANY depth - which is exactly what went wrong: it silently
+# swallowed src/app/api/workspace/backups/ and src/app/api/cloud/backups/, so
+# `git add` skipped those route files and the app shipped calling three
+# endpoints that were not in the repository. Anchor every rule that names a
+# generic directory.
+/backups/
+/logs/
+/dist-desktop/
+# Release artifacts (scripts/package-release.mjs output)
+/dist/
+/.backup-check/
+
+# Tunnel tokens and other deploy credentials live beside the compose file.
+/secrets/

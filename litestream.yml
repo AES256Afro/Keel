@@ -1,0 +1,23 @@
+# Litestream - continuous replication of the Keel SQLite database to
+# Cloudflare R2. Values come from the environment (see .env.prod.example).
+#
+# This file is a template: docker/entrypoint.sh rewrites the db path below to
+# whatever DATABASE_URL names before handing the config to Litestream, so the
+# path here must stay on its own `- path:` line.
+#
+# R2 is S3-compatible, so this uses the s3 replica type pointed at your R2
+# account endpoint. force-path-style + region "auto" are required for R2.
+dbs:
+  - path: /data/keel.db
+    replicas:
+      - type: s3
+        endpoint: ${LITESTREAM_R2_ENDPOINT}          # https://<accountid>.r2.cloudflarestorage.com
+        bucket: ${LITESTREAM_R2_BUCKET}
+        path: keel
+        access-key-id: ${LITESTREAM_R2_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_R2_SECRET_ACCESS_KEY}
+        region: auto
+        force-path-style: true
+        # Keep a day of sub-second restore granularity, then hourly snapshots.
+        retention: 720h
+        snapshot-interval: 1h

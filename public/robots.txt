@@ -1,0 +1,3 @@
+# A Keel notebook is a private workspace, not a website.
+User-agent: *
+Disallow: /

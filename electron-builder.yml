@@ -1,0 +1,35 @@
+appId: app.keel.desktop
+productName: Keel
+directories:
+  output: dist-desktop
+
+# The Electron app itself is just the shell; the whole Next.js server
+# (standalone build) ships as a resource and runs as a child process.
+files:
+  - desktop/**
+  - "!node_modules/**"
+extraResources:
+  - from: .next/standalone
+    to: server
+
+npmRebuild: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Office
+  maintainer: keel
+
+mac:
+  target: [dmg]
+  category: public.app-category.productivity

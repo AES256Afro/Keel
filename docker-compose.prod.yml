@@ -1,0 +1,45 @@
+# Keel - always-on production stack (VPS).
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# - keel: the app, running under Litestream (continuous backup to R2).
+# - caddy: TLS-terminating reverse proxy (automatic HTTPS) on 80/443.
+#
+# Data safety: the SQLite database lives on the keel-data volume AND is
+# streamed to R2 in real time, so an upgrade or a lost VPS never loses data.
+services:
+  keel:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    env_file: .env.prod
+    environment:
+      - NODE_ENV=production
+      # Caddy fronts Keel here, so X-Forwarded-For is trustworthy.
+      - KEEL_TRUST_PROXY=1
+      - PORT=3000
+      - DATABASE_URL=file:/data/keel.db
+    volumes:
+      - keel-data:/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - keel
+    env_file: .env.prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  keel-data:
+  caddy-data:
+  caddy-config:

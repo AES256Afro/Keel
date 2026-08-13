@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+logs
+backups
+prisma/*.db
+prisma/*.db-wal
+prisma/*.db-shm
+.env
+.env.*
+secrets
+*.pem
+dist
+dist-desktop
