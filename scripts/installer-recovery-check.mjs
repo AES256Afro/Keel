@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { prepareDatabase, testPrisma } from "./test-db.mjs";
 import { recoverV121InstallerEnv } from "./recover-v121-installer-env.mjs";
@@ -24,6 +25,91 @@ function check(name, ok, detail = "") {
     console.log(`  \x1b[31m✗\x1b[0m ${name}${detail ? ` - ${detail}` : ""}`);
   }
 }
+
+const shellInstaller = fs.readFileSync(path.join(root, "install.sh"), "utf8");
+const powershellInstaller = fs.readFileSync(path.join(root, "install.ps1"), "utf8");
+
+function exerciseShellRestartFailure(manager) {
+  if (process.platform === "win32") return "skipped";
+  const start = shellInstaller.indexOf("restart_stopped_managed_service() {");
+  const endMarker = "\n}\n\non_installer_exit()";
+  const end = shellInstaller.indexOf(endMarker, start);
+  if (start < 0 || end < 0) return "function-not-found";
+  const restartFunction = shellInstaller.slice(start, end + 3);
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `${restartFunction}
+ok() { :; }
+launchctl() { return 41; }
+systemctl() { return 42; }
+STOPPED_MANAGED_SERVICE=${manager}
+STOPPED_MANAGED_PLIST=/tmp/keel-test.plist
+restart_stopped_managed_service
+status=$?
+printf '%s|%s' "$status" "$STOPPED_MANAGED_SERVICE"
+`,
+    ],
+    { encoding: "utf8" },
+  );
+  return result.stdout;
+}
+
+console.log("\nManaged-service update boundary\n");
+check(
+  "the shell installer stops a verified manager before changing dependencies",
+  shellInstaller.indexOf("stop_managed_service_for_update") < shellInstaller.indexOf("npm ci --no-audit --no-fund"),
+);
+check(
+  "the shell installer verifies launchd and systemd working directories",
+  shellInstaller.includes("Print :WorkingDirectory") &&
+    shellInstaller.includes("--property=WorkingDirectory --value") &&
+    shellInstaller.includes('managed_dir" = "$target_dir'),
+);
+check(
+  "the shell installer restores a stopped service after failure",
+  shellInstaller.includes("trap 'on_installer_exit $?' EXIT") &&
+    shellInstaller.includes("attempting to restore the previously running service") &&
+    shellInstaller.includes('if ! launchctl load -w "$STOPPED_MANAGED_PLIST"') &&
+    shellInstaller.includes("if ! systemctl --user start keel.service"),
+);
+check(
+  "a failed launchd restart is reported and remains recoverable",
+  exerciseShellRestartFailure("launchd") === (process.platform === "win32" ? "skipped" : "1|launchd"),
+);
+check(
+  "a failed systemd restart is reported and remains recoverable",
+  exerciseShellRestartFailure("systemd") === (process.platform === "win32" ? "skipped" : "1|systemd"),
+);
+check(
+  "the PowerShell installer verifies the scheduled task action and working directory",
+  powershellInstaller.includes('$taskExecutable -ieq "cmd.exe"') &&
+    powershellInstaller.includes("[string]::Equals($targetDir, $taskDir") &&
+    powershellInstaller.includes("Stop-ScheduledTask -TaskName \"Keel\""),
+);
+check(
+  "a successful PowerShell -Service update replaces the stopped task without first restarting it",
+  powershellInstaller.includes(
+    "if ($stoppedManagedTask -and (-not $installSucceeded -or -not $Service))",
+  ) &&
+    !powershellInstaller.includes("Unregister-ScheduledTask -TaskName $taskName") &&
+    powershellInstaller.includes('-Description "Keel workspace server" -Force'),
+);
+check(
+  "every PowerShell service-preparation failure restores the preserved task definition",
+  powershellInstaller.includes('$stoppedManagedTaskXml = Export-ScheduledTask -TaskName "Keel"') &&
+    powershellInstaller.indexOf('try {\n    Say "Registering the startup task"') <
+      powershellInstaller.indexOf('$npmCmd   = (Get-Command npm -ErrorAction Stop).Source') &&
+    powershellInstaller.includes(
+      'Register-ScheduledTask -TaskName "Keel" -Xml $stoppedManagedTaskXml -Force',
+    ),
+);
+check(
+  "the PowerShell installer always attempts to restore the stopped task",
+  powershellInstaller.includes("} finally {") &&
+    powershellInstaller.includes("Start-ScheduledTask -TaskName \"Keel\""),
+);
 
 function legacyEnv(databaseUrl, options = {}) {
   const {
