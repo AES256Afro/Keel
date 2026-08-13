@@ -1,8 +1,16 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireOwner } from "@/lib/api";
-import { exchangeCode, googleUserInfo, microsoftUserInfo } from "@/lib/oauth";
+import { enforceLimit, requireOwner } from "@/lib/api";
+import {
+  exchangeCode,
+  googleUserInfo,
+  microsoftUserInfo,
+  verifiedGoogleIdentity,
+} from "@/lib/oauth";
 import { publicOrigin, relativeRedirect } from "@/lib/request-origin";
+import { sealWorkspaceCredential } from "@/lib/workspace-secrets";
+import { consumeOAuthConnectionState } from "@/lib/oauth-connection-state";
+import { activeRequestSession } from "@/lib/oauth-request-session";
 
 /** OAuth callback for cloud backup connections; stores the refresh token. */
 export async function GET(
@@ -16,11 +24,30 @@ export async function GET(
   if (provider !== "google" && provider !== "onedrive") return back("cloud=invalid");
 
   try {
-    const { workspace } = await requireOwner();
+    const { user, workspace } = await requireOwner();
+    await enforceLimit("cloud-oauth-callback", {
+      limit: 20,
+      windowMs: 10 * 60 * 1000,
+      blockMs: 10 * 60 * 1000,
+      userId: user.id,
+    });
+    const session = await activeRequestSession(req, user.id);
+    if (!session) return back("cloud=failed");
     const code = req.nextUrl.searchParams.get("code");
-    const state = req.nextUrl.searchParams.get("state");
-    const expected = req.cookies.get("keel-oauth-state")?.value;
-    if (!code || !state || !expected || state !== expected) return back("cloud=failed");
+    const state = req.nextUrl.searchParams.get("state") ?? "";
+    const consumed = await consumeOAuthConnectionState({
+      session,
+      provider,
+      purpose: "cloud",
+      state,
+    });
+    if (!consumed.ok || consumed.workspaceId !== workspace.id) return back("cloud=failed");
+
+    const providerError = req.nextUrl.searchParams.get("error");
+    if (providerError) {
+      return back(providerError === "access_denied" ? "cloud=cancelled" : "cloud=failed");
+    }
+    if (!code) return back("cloud=failed");
 
     const token = await exchangeCode(
       provider,
@@ -29,26 +56,36 @@ export async function GET(
     );
     if (!token.refresh_token) return back("cloud=no-refresh-token");
 
-    const email =
-      provider === "google"
-        ? (await googleUserInfo(token.access_token)).email
-        : (await microsoftUserInfo(token.access_token)).email;
+    let email: string;
+    if (provider === "google") {
+      const identity = verifiedGoogleIdentity(await googleUserInfo(token.access_token));
+      if (!identity) return back("cloud=failed");
+      email = identity.email;
+    } else {
+      email = (await microsoftUserInfo(token.access_token)).email;
+    }
 
-    await prisma.workspace.update({
-      where: { id: workspace.id },
+    const updated = await prisma.workspace.updateMany({
+      where: { id: consumed.workspaceId, ownerId: user.id },
       data: {
         cloudProvider: provider,
-        cloudRefreshToken: token.refresh_token,
+        cloudRefreshToken: sealWorkspaceCredential(
+          consumed.workspaceId,
+          provider,
+          token.refresh_token
+        ),
         cloudEmail: email,
         cloudFolderId: null,
         lastBackupError: null,
       },
     });
-    const res = back("cloud=connected");
-    res.cookies.delete("keel-oauth-state");
-    return res;
+    if (updated.count !== 1) return back("cloud=failed");
+    return back("cloud=connected");
   } catch (err) {
-    console.error("[keel] cloud connect failed", err);
+    console.error(
+      "[keel] cloud connect failed",
+      err instanceof Error ? err.name : "UnknownError"
+    );
     return back("cloud=failed");
   }
 }

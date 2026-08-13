@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import path from "node:path";
 import { prisma } from "@/lib/prisma";
 import { requireOwner, handleApiError, ApiError, enforceLimit } from "@/lib/api";
-import { envBackupPassphrase, listBackups, runBackup } from "@/lib/backup";
+import {
+  BackupInProgressError,
+  configuredBackupPassphrase,
+  listBackups,
+  runBackup,
+} from "@/lib/backup";
 import { audit } from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -21,8 +27,8 @@ export async function GET() {
  * is connected, upload it off-site.
  *
  * `encrypt` lets the caller encrypt this one backup without changing the
- * workspace's saved setting; the passphrase is taken from the request, falling
- * back to KEEL_BACKUP_PASSPHRASE (never stored in the database).
+ * workspace's saved setting. The passphrase is taken from the request, falling
+ * back to the instance owner's write-only managed secret or environment override.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -38,10 +44,10 @@ export async function POST(req: NextRequest) {
     const passphrase =
       typeof body.passphrase === "string" && body.passphrase ? body.passphrase : undefined;
 
-    if (encrypt && !passphrase && !envBackupPassphrase()) {
+    if (encrypt && !passphrase && !(await configuredBackupPassphrase())) {
       throw new ApiError(
         400,
-        "Encrypted backups need a passphrase. Enter one or set KEEL_BACKUP_PASSPHRASE on the server."
+        "Encrypted backups need a passphrase. Enter one, or ask the instance owner to configure the scheduled-backup secret in Settings or the host environment."
       );
     }
 
@@ -49,6 +55,9 @@ export async function POST(req: NextRequest) {
     try {
       result = await runBackup({ ...workspace, backupEncrypt: encrypt }, passphrase);
     } catch (err) {
+      if (err instanceof BackupInProgressError) {
+        throw new ApiError(409, err.message);
+      }
       const message = err instanceof Error ? err.message : "Backup failed";
       // Surface the failure in Settings on the next load, not just in the log.
       await prisma.workspace
@@ -62,7 +71,9 @@ export async function POST(req: NextRequest) {
       detail: { encrypted: encrypt, cloud: result.cloud ?? null },
     });
     return NextResponse.json({
-      file: result.file,
+      // Workspace owners need the filename for restore/UI feedback, never the
+      // server's absolute filesystem layout.
+      file: path.basename(result.file),
       cloud: result.cloud ?? null,
       backups: await listBackups(workspace),
     });

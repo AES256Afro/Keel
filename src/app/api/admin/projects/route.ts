@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { audit } from "@/lib/audit";
+import { requireJsonRequest, requireSameOriginMutation } from "@/lib/same-origin";
 import { requireInstanceOwner, handleApiError } from "@/lib/api";
 import { serializeTags } from "@/lib/site";
 
@@ -19,6 +20,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const ctx = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Change public projects from Keel Admin");
+    requireJsonRequest(req, "Public-project requests must use application/json");
     const b = await req.json().catch(() => ({}));
     const title = String(b.title ?? "").trim();
     if (!title) return NextResponse.json({ error: "Title is required" }, { status: 400 });

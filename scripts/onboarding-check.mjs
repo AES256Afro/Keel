@@ -89,7 +89,12 @@ check(
     .find((c) => c.key === "google-signin")
     .needs[0].steps.some((s) => s.includes("https://example.keel.test/api/auth/google/callback"))
 );
-const status = detectStatus({ cloudProvider: null, cloudRefreshToken: null, cloudEmail: null, oneNoteRefreshToken: null });
+const status = await detectStatus({
+  cloudProvider: null,
+  cloudRefreshToken: null,
+  cloudEmail: null,
+  oneNoteRefreshToken: null,
+});
 check("detectStatus covers every capability", caps.every((c) => status[c.key]));
 check("no cloud provider → backup attention", needsBackupAttention({ cloudProvider: null }) === true);
 check("any provider → no nag", needsBackupAttention({ cloudProvider: "azure" }) === false);
@@ -146,7 +151,13 @@ async function waitFor(url, tries = 160) {
   }
   return false;
 }
-const as = (who) => ({ headers: { cookie: `keel_session=${tokens[who]}` } });
+const as = (who) => ({
+  headers: {
+    cookie: `keel_session=${tokens[who]}`,
+    Origin: BASE,
+    "Sec-Fetch-Site": "same-origin",
+  },
+});
 
 try {
   if (!(await waitFor(`${BASE}/api/health`))) throw new Error("server did not start");
@@ -201,14 +212,24 @@ try {
 
   res = await fetch(`${BASE}/api/cloud/r2`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", cookie: `keel_session=${tokens.fresh}` },
+    headers: {
+      "Content-Type": "application/json",
+      cookie: `keel_session=${tokens.fresh}`,
+      Origin: BASE,
+      "Sec-Fetch-Site": "same-origin",
+    },
     body: JSON.stringify({ endpoint: "http://169.254.169.254", bucket: "x", accessKeyId: "x", secretKey: "x" }),
   });
   check("an internal endpoint is rejected before any fetch", res.status === 400, `status ${res.status}`);
 
   res = await fetch(`${BASE}/api/cloud/r2`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", cookie: `keel_session=${tokens.fresh}` },
+    headers: {
+      "Content-Type": "application/json",
+      cookie: `keel_session=${tokens.fresh}`,
+      Origin: BASE,
+      "Sec-Fetch-Site": "same-origin",
+    },
     body: JSON.stringify({ endpoint: "https://evil.tld/x", bucket: "x", accessKeyId: "x", secretKey: "x" }),
   });
   check("a non-R2 https host is rejected", res.status === 400, `status ${res.status}`);
@@ -217,14 +238,24 @@ try {
 
   res = await fetch(`${BASE}/api/cloud/azure`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", cookie: `keel_session=${tokens.fresh}` },
+    headers: {
+      "Content-Type": "application/json",
+      cookie: `keel_session=${tokens.fresh}`,
+      Origin: BASE,
+      "Sec-Fetch-Site": "same-origin",
+    },
     body: JSON.stringify({ sasUrl: "https://internal.service/c?sv=1&sig=x" }),
   });
   check("a non-Azure URL is rejected at the route", res.status === 400, `status ${res.status}`);
 
   res = await fetch(`${BASE}/api/cloud/azure`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", cookie: `keel_session=${tokens.viewer}` },
+    headers: {
+      "Content-Type": "application/json",
+      cookie: `keel_session=${tokens.viewer}`,
+      Origin: BASE,
+      "Sec-Fetch-Site": "same-origin",
+    },
     body: JSON.stringify({ sasUrl: GOOD }),
   });
   check("a viewer cannot connect backup targets", res.status === 403, `status ${res.status}`);
@@ -247,7 +278,11 @@ try {
   form.append("pageId", page.id);
   res = await fetch(`${BASE}/api/attachments`, {
     method: "POST",
-    headers: { cookie: `keel_session=${tokens.fresh}` },
+    headers: {
+      cookie: `keel_session=${tokens.fresh}`,
+      Origin: BASE,
+      "Sec-Fetch-Site": "same-origin",
+    },
     body: form,
   });
   check("a 15 MB screenshot uploads with default caps", res.status === 201, `status ${res.status}`);

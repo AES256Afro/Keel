@@ -247,6 +247,7 @@ body {
 
 /* Hide everything that isn't the document being written. */
 .keel-focus-chrome aside,
+.keel-focus-chrome .keel-mobile-nav-trigger,
 .keel-focus-chrome header .keel-page-actions,
 .keel-focus-chrome .keel-hide-in-focus {
   display: none;

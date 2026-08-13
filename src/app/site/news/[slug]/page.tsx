@@ -1,8 +1,20 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPublishedNews } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const post = await getPublishedNews((await params).slug);
+  return post
+    ? { title: post.title, description: post.excerpt ?? undefined }
+    : { title: "News" };
+}
 
 // Render owner-authored text safely: paragraphs on blank lines, line breaks
 // preserved, bare URLs turned into links (built as React nodes, never HTML).

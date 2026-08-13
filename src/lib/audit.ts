@@ -15,7 +15,10 @@ import { clientIp, UNIDENTIFIED_IP } from "@/lib/rate-limit";
 
 export type AuditAction =
   // Instance-wide
+  | "instance.claim"
   | "access.update"
+  | "oauth.settings"
+  | "operator.settings"
   | "tunnel.start"
   | "tunnel.stop"
   | "server.restart"
@@ -40,6 +43,7 @@ export type AuditAction =
   | "workspace.export"
   // Account
   | "account.password"
+  | "account.google.link"
   | "account.session.revoke"
   | "account.sessions.revokeAll"
   | "credential.register"

@@ -15,7 +15,7 @@ export default async function LoginPage({
     <AuthForm
       mode="login"
       action={login}
-      googleEnabled={googleConfigured()}
+      googleEnabled={await googleConfigured()}
       oauthError={error ?? null}
       oauthDetail={detail ?? null}
     />

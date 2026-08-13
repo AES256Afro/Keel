@@ -9,15 +9,21 @@
 //   npm run build && node scripts/attachments-check.mjs
 import { spawn } from "child_process";
 import { randomBytes } from "crypto";
+import fs from "fs/promises";
+import { request as httpRequest } from "http";
 import path from "path";
-import { fileURLToPath } from "url";
+import { register } from "node:module";
+import os from "os";
+import { fileURLToPath, pathToFileURL } from "url";
 import { cleanDatabase, prepareDatabase, testDatabaseUrl, testPrisma } from "./test-db.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+register("./ts-loader.mjs", import.meta.url);
 const DB_NAME = "attachments-check";
 const DB_URL = testDatabaseUrl(root, DB_NAME);
 const PORT = Number(process.env.ATTACH_PORT || 3199);
 const BASE = `http://127.0.0.1:${PORT}`;
+const uploadRoot = await fs.mkdtemp(path.join(os.tmpdir(), "keel-attachment-storage-"));
 
 let passed = 0;
 const failures = [];
@@ -108,6 +114,7 @@ const server = spawn("npx", ["next", "start", "-p", String(PORT)], {
     // Tight limits so the suite can actually hit them: 1 MB per file, 2 MB total.
     KEEL_MAX_ATTACHMENT_MB: "1",
     KEEL_ATTACHMENT_QUOTA_MB: "2",
+    NOPIN_UPLOAD_DIR: uploadRoot,
   },
   stdio: "ignore",
   shell: process.platform === "win32",
@@ -119,7 +126,11 @@ const upload = (as, pageId, bytes, name, type = "application/octet-stream") => {
   form.append("pageId", pageId);
   return fetch(`${BASE}/api/attachments`, {
     method: "POST",
-    headers: { cookie: `keel_session=${tokens[as]}` },
+    headers: {
+      cookie: `keel_session=${tokens[as]}`,
+      Origin: BASE,
+      "Sec-Fetch-Site": "same-origin",
+    },
     body: form,
   });
 };
@@ -128,8 +139,112 @@ const get = (as, id) =>
     headers: { cookie: `keel_session=${tokens[as]}` },
   });
 
+const rawChunkedUpload = (bytes, declaredLength) =>
+  new Promise((resolve, reject) => {
+    const boundary = "keel-bounded-upload";
+    const prefix = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="pageId"\r\n\r\n${page.id}\r\n` +
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="huge.bin"\r\n` +
+        `Content-Type: application/octet-stream\r\n\r\n`
+    );
+    const suffix = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const headers = {
+      cookie: `keel_session=${tokens.owner}`,
+      Origin: BASE,
+      "Sec-Fetch-Site": "same-origin",
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      ...(declaredLength === undefined ? {} : { "Content-Length": String(declaredLength) }),
+    };
+    const req = httpRequest(
+      { host: "127.0.0.1", port: PORT, path: "/api/attachments", method: "POST", headers },
+      (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode));
+      }
+    );
+    req.on("error", reject);
+    req.write(prefix);
+    for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
+      req.write(bytes.subarray(offset, offset + 64 * 1024));
+    }
+    req.end(suffix);
+  });
+
 try {
   if (!(await waitFor(`${BASE}/api/health`))) throw new Error("server did not start");
+
+  const {
+    AttachmentUploadBusyError,
+    withAttachmentUploadSlot,
+  } = await import(pathToFileURL(path.join(root, "src/lib/attachment-upload-guard.ts")).href);
+  const { withWorkspaceStorageLock } = await import(
+    pathToFileURL(path.join(root, "src/lib/workspace-storage.ts")).href
+  );
+  let releaseUploads;
+  const uploadGate = new Promise((resolve) => {
+    releaseUploads = resolve;
+  });
+  const heldUploads = [1, 2].map(() => withAttachmentUploadSlot(() => uploadGate));
+  let excessUploadError;
+  try {
+    await withAttachmentUploadSlot(async () => {});
+  } catch (error) {
+    excessUploadError = error;
+  }
+  check(
+    "the global upload work cap sheds excess requests before body work begins",
+    excessUploadError instanceof AttachmentUploadBusyError
+  );
+  releaseUploads();
+  await Promise.all(heldUploads);
+
+  let firstWorkspaceRelease;
+  const firstWorkspaceGate = new Promise((resolve) => {
+    firstWorkspaceRelease = resolve;
+  });
+  const workspaceOrder = [];
+  const firstWorkspaceWork = withWorkspaceStorageLock("quota-race", async () => {
+    workspaceOrder.push("first-start");
+    await firstWorkspaceGate;
+    workspaceOrder.push("first-end");
+  });
+  const secondWorkspaceWork = withWorkspaceStorageLock("quota-race", async () => {
+    workspaceOrder.push("second-start");
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  check(
+    "one workspace's quota section is serialized",
+    workspaceOrder.join(",") === "first-start",
+    workspaceOrder.join(",")
+  );
+  firstWorkspaceRelease();
+  await Promise.all([firstWorkspaceWork, secondWorkspaceWork]);
+  check(
+    "the next quota section runs only after the first commits or refuses",
+    workspaceOrder.join(",") === "first-start,first-end,second-start",
+    workspaceOrder.join(",")
+  );
+
+  let sharedUsage = 6;
+  const reserveAcrossStore = (kind) =>
+    withWorkspaceStorageLock("cross-store-race", async () => {
+      const observed = sharedUsage;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (observed + 4 > 10) return `${kind}-refused`;
+      sharedUsage = observed + 4;
+      return `${kind}-stored`;
+    });
+  const crossStore = await Promise.all([
+    reserveAcrossStore("attachment"),
+    reserveAcrossStore("onenote"),
+  ]);
+  check(
+    "the shared workspace lock prevents attachment and OneNote quota decisions from racing",
+    sharedUsage === 10 &&
+      crossStore.filter((result) => result.endsWith("-stored")).length === 1 &&
+      crossStore.filter((result) => result.endsWith("-refused")).length === 1,
+    `${crossStore.join(",")}; usage=${sharedUsage}`
+  );
 
   console.log("\nUpload and serve\n");
 
@@ -235,6 +350,53 @@ try {
   const bigRes = await upload("owner", page.id, big, "big.bin");
   check("an over-cap file is refused with 413", bigRes.status === 413, `status ${bigRes.status}`);
 
+  const beforeChunkedDb = await testPrisma(root, DB_URL);
+  const beforeChunked = await beforeChunkedDb.attachment.count({
+    where: { workspaceId: ws.id },
+  });
+  await beforeChunkedDb.$disconnect();
+  const chunkedStatus = await rawChunkedUpload(Buffer.alloc(1_200_000, 8));
+  const afterChunkedDb = await testPrisma(root, DB_URL);
+  const afterChunked = await afterChunkedDb.attachment.count({ where: { workspaceId: ws.id } });
+  await afterChunkedDb.$disconnect();
+  check(
+    "a chunked over-cap multipart body is stopped before form parsing",
+    chunkedStatus === 413 && afterChunked === beforeChunked,
+    `status ${chunkedStatus}, rows ${beforeChunked} -> ${afterChunked}`
+  );
+
+  const { readBoundedRequestBody, RequestBodyTooLargeError } = await import(
+    pathToFileURL(path.join(root, "src/lib/bounded-request.ts")).href
+  );
+  let pulls = 0;
+  let cancelled = false;
+  const forged = new Request(`${BASE}/api/attachments`, {
+    method: "POST",
+    headers: { "Content-Length": "64" },
+    body: new ReadableStream({
+      pull(controller) {
+        pulls++;
+        controller.enqueue(new Uint8Array(256 * 1024));
+        if (pulls >= 100) controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+    duplex: "half",
+  });
+  let bounded = false;
+  try {
+    await readBoundedRequestBody(forged, 1024 * 1024, "too large");
+  } catch (err) {
+    bounded = err instanceof RequestBodyTooLargeError;
+  }
+  check(
+    "a forged small Content-Length is still capped while streaming",
+    bounded && cancelled && pulls < 100,
+    `bounded=${bounded} cancelled=${cancelled} pulls=${pulls}`
+  );
+
   // Quota is 2 MB; two 900 KB files fit, the third does not.
   const fill = Buffer.alloc(900_000, 1);
   const f1 = await upload("owner", page.id, fill, "f1.bin");
@@ -246,6 +408,39 @@ try {
     `${f1.status}, ${f2.status}`
   );
   check("the upload that would breach the quota is refused", f3.status === 413, `status ${f3.status}`);
+
+  const oneNoteDir = path.join(uploadRoot, ws.id);
+  await fs.mkdir(oneNoteDir, { recursive: true });
+  await fs.writeFile(
+    path.join(oneNoteDir, `onenote-${"a".repeat(64)}.png`),
+    Buffer.alloc(350_000, 5)
+  );
+  const afterOneNote = await upload("owner", page.id, PNG, "after-onenote.png", "image/png");
+  check(
+    "ordinary uploads count existing valid OneNote assets against workspace quota",
+    afterOneNote.status === 413,
+    `status ${afterOneNote.status}`
+  );
+
+  const raceSeed = await upload("outsider", foreignPage.id, Buffer.alloc(600_000, 2), "race-seed.bin");
+  const raceUploads = await Promise.all([
+    upload("outsider", foreignPage.id, Buffer.alloc(800_000, 3), "race-a.bin"),
+    upload("outsider", foreignPage.id, Buffer.alloc(800_000, 4), "race-b.bin"),
+  ]);
+  const raceDb = await testPrisma(root, DB_URL);
+  const raceUsed = await raceDb.attachment.aggregate({
+    where: { workspaceId: otherWs.id },
+    _sum: { size: true },
+  });
+  await raceDb.$disconnect();
+  check(
+    "concurrent near-quota uploads cannot race past the workspace ceiling",
+    raceSeed.status === 201 &&
+      raceUploads.filter((response) => response.status === 201).length === 1 &&
+      raceUploads.filter((response) => response.status === 413).length === 1 &&
+      (raceUsed._sum.size ?? 0) === 1_400_000,
+    `seed=${raceSeed.status} pair=${raceUploads.map((response) => response.status).join(",")} bytes=${raceUsed._sum.size}`
+  );
 
   console.log("\nWho may do what\n");
 
@@ -270,7 +465,11 @@ try {
 
   const viewerDel = await fetch(`${BASE}/api/attachments/${attachment.id}`, {
     method: "DELETE",
-    headers: { cookie: `keel_session=${tokens.viewer}` },
+    headers: {
+      cookie: `keel_session=${tokens.viewer}`,
+      Origin: BASE,
+      "Sec-Fetch-Site": "same-origin",
+    },
   });
   check("a viewer cannot delete", viewerDel.status === 403, `status ${viewerDel.status}`);
 
@@ -296,6 +495,7 @@ try {
 } finally {
   server.kill();
   cleanDatabase(root, DB_NAME);
+  await fs.rm(uploadRoot, { recursive: true, force: true });
 }
 
 if (failures.length) {

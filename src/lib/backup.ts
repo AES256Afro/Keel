@@ -23,6 +23,7 @@ import {
   MAX_VALUE,
 } from "@/lib/limits";
 import { keelEnv, keelFlag } from "@/lib/env";
+import { resolveScheduledBackupPassphrase } from "@/lib/instance-settings";
 import {
   ENCRYPTED_EXTENSION,
   backupPrefixes,
@@ -2637,6 +2638,28 @@ export function backupDirFor(workspace: { id: string; backupDir: string | null }
   return path.resolve(backupRoot(), workspace.id);
 }
 
+/**
+ * Tighten backups created by older Keel versions. Only the per-workspace
+ * directory Keel chose itself is changed. An operator-supplied custom folder
+ * may have deliberate shared-folder permissions and is left untouched.
+ */
+async function hardenOwnedBackupDirectory(
+  workspace: { id: string; backupDir: string | null },
+  dir: string
+): Promise<void> {
+  if (workspace.backupDir?.trim()) return;
+  await fs.chmod(dir, 0o700).catch(() => {});
+  const prefixes = backupPrefixes(workspace.id);
+  for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
+    if (!prefixes.some((prefix) => name.startsWith(prefix)) || !isBackupName(name)) continue;
+    const file = path.join(dir, name);
+    try {
+      const stat = await fs.lstat(file);
+      if (stat.isFile() && !stat.isSymbolicLink()) await fs.chmod(file, 0o600);
+    } catch {}
+  }
+}
+
 /** Prefix for newly written backups. Reading accepts backupPrefixes(). */
 function backupPrefix(workspaceId: string) {
   return backupPrefixes(workspaceId)[0];
@@ -2644,8 +2667,8 @@ function backupPrefix(workspaceId: string) {
 
 
 
-export function envBackupPassphrase(): string | undefined {
-  return keelEnv("BACKUP_PASSPHRASE") || undefined;
+export async function configuredBackupPassphrase(): Promise<string | undefined> {
+  return resolveScheduledBackupPassphrase();
 }
 
 /**
@@ -2694,9 +2717,63 @@ export const backupBackoff = (() => {
   };
 })();
 
+const backupRuntime = globalThis as unknown as {
+  __keelBackupRuns?: Set<string>;
+};
+const backupRuns = (backupRuntime.__keelBackupRuns ??= new Set<string>());
+
+export class BackupInProgressError extends Error {
+  readonly workspaceId: string;
+
+  constructor(workspaceId: string) {
+    super("A backup for this workspace is already running. Try again after it finishes.");
+    this.name = "BackupInProgressError";
+    this.workspaceId = workspaceId;
+  }
+}
+
+/** Process-wide per-workspace lease. Different workspaces remain independent,
+ * while manual and scheduled runs for the same workspace cannot interleave. */
+export const backupLease = {
+  acquire(workspaceId: string): boolean {
+    if (backupRuns.has(workspaceId)) return false;
+    backupRuns.add(workspaceId);
+    return true;
+  },
+  release(workspaceId: string): void {
+    backupRuns.delete(workspaceId);
+  },
+  /** Tests only. */
+  reset(): void {
+    backupRuns.clear();
+  },
+};
+
 /** Write a backup file for the workspace, upload to cloud storage when
  *  connected, and prune old local copies. */
 export async function runBackup(
+  workspace: {
+    id: string;
+    backupDir: string | null;
+    backupKeep: number;
+    backupEncrypt: boolean;
+    cloudProvider?: string | null;
+    cloudRefreshToken?: string | null;
+    cloudFolderId?: string | null;
+  },
+  passphrase?: string
+): Promise<{ file: string; cloud?: string }> {
+  if (!backupLease.acquire(workspace.id)) {
+    throw new BackupInProgressError(workspace.id);
+  }
+  try {
+    return await runBackupExclusive(workspace, passphrase);
+  } finally {
+    backupLease.release(workspace.id);
+  }
+}
+
+async function runBackupExclusive(
   workspace: {
     id: string;
     backupDir: string | null;
@@ -2714,20 +2791,22 @@ export async function runBackup(
   // meant re-reading the whole workspace forever to reach the same throw.
   let key: string | undefined;
   if (workspace.backupEncrypt) {
-    key = passphrase ?? envBackupPassphrase();
+    key = passphrase ?? (await configuredBackupPassphrase());
     if (!key) {
       throw new Error(
-        "Backup encryption is enabled but no passphrase is available. Set KEEL_BACKUP_PASSPHRASE."
+        "Backup encryption is enabled but no passphrase is available. Configure the scheduled-backup secret in Settings or the host environment."
       );
     }
   }
 
   const dir = backupDirFor(workspace);
-  await fs.mkdir(dir, { recursive: true });
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await hardenOwnedBackupDirectory(workspace, dir);
 
   const ext = key ? ENCRYPTED_EXTENSION : ".json";
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const file = path.join(dir, `${backupPrefix(workspace.id)}${stamp}${ext}`);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const nonce = crypto.randomBytes(4).toString("hex");
+  const file = path.join(dir, `${backupPrefix(workspace.id)}${stamp}-${nonce}${ext}`);
   const tmp = file + ".tmp";
 
   // Straight to disk, chunk by chunk. The whole file is never a string and
@@ -2737,7 +2816,10 @@ export async function runBackup(
   const out = key ? encryptedChunks(plain, key) : plain;
   try {
     const { pipeline } = await import("node:stream/promises");
-    await pipeline(out, createWriteStream(tmp, { encoding: "utf8" }));
+    await pipeline(
+      out,
+      createWriteStream(tmp, { encoding: "utf8", flags: "wx", mode: 0o600 })
+    );
   } catch (err) {
     await fs.unlink(tmp).catch(() => {});
     throw err;
@@ -2799,6 +2881,7 @@ export async function listBackups(workspace: {
   } catch {
     return [];
   }
+  await hardenOwnedBackupDirectory(workspace, dir);
   const prefixes = backupPrefixes(workspace.id);
   const out: { name: string; size: number; modifiedAt: string }[] = [];
   for (const name of names) {

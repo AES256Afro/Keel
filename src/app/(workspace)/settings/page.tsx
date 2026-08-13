@@ -1,17 +1,37 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getCurrentContext } from "@/lib/auth";
-import { backupDirFor, envBackupPassphrase, listBackups } from "@/lib/backup";
+import { backupDirFor, configuredBackupPassphrase, listBackups } from "@/lib/backup";
 import { listMembersAndInvites } from "@/lib/members";
 import { googleConfigured, microsoftConfigured } from "@/lib/oauth";
 import { getAccessSettings } from "@/lib/access";
-import { isInstanceOwner } from "@/lib/instance";
+import { getInstanceClaimStatus } from "@/lib/instance";
 import { schemaStatus } from "@/lib/schema-migrate";
 import SettingsClient from "@/components/SettingsClient";
 
-export default async function SettingsPage() {
+const GOOGLE_LINK_RESULTS = new Set([
+  "linked",
+  "already-linked",
+  "cancelled",
+  "email-mismatch",
+  "conflict",
+  "expired",
+  "rate-limited",
+  "failed",
+]);
+
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ googleLink?: string | string[] }>;
+}) {
   const ctx = await getCurrentContext();
   if (!ctx) redirect("/login");
+  const rawGoogleLink = (await searchParams).googleLink;
+  const googleLinkResult =
+    typeof rawGoogleLink === "string" && GOOGLE_LINK_RESULTS.has(rawGoogleLink)
+      ? rawGoogleLink
+      : null;
   // Where backups live on the server, what they are called, and why the last
   // one failed are facts about the machine, not about the workspace - the
   // resolved directory is an absolute host path, and a failure message carries
@@ -20,12 +40,10 @@ export default async function SettingsPage() {
   // viewer who asks for this list over the API is refused, and the
   // server-rendered page handing them the same list unasked was the leak.
   //
-  // The line is the workspace owner rather than the instance owner (as it is
-  // for the access and schema panels) because backups are a workspace-owner
-  // capability all the way down: they configure the folder, "Back up now"
-  // answers them with the absolute file path it wrote, and Restore is theirs.
-  // Gating the path any tighter would leave a non-instance-owner owner with a
-  // blank folder field whose Save silently clears their configured folder.
+  // Backup controls belong to the workspace owner, but the resolved default
+  // directory is an absolute host path. A workspace owner can still see and
+  // edit a custom directory they configured; only the instance owner needs the
+  // machine's resolved default path as an input placeholder.
   const workspaceOwner = ctx.role === "owner";
   const backups = workspaceOwner ? await listBackups(ctx.workspace) : [];
   const { members, invites } = workspaceOwner
@@ -33,8 +51,16 @@ export default async function SettingsPage() {
     : { members: [], invites: [] };
   // Instance-wide controls answer to the server operator, not to every account
   // that owns its own workspace (which is all of them).
-  const instanceOwner = await isInstanceOwner(ctx.user);
-  const access = instanceOwner ? await getAccessSettings() : null;
+  const claimStatus = await getInstanceClaimStatus(ctx.user);
+  const instanceOwner = claimStatus.isOwner;
+  const [access, googleReady, microsoftReady] = await Promise.all([
+    instanceOwner ? getAccessSettings() : Promise.resolve(null),
+    googleConfigured(),
+    microsoftConfigured(),
+  ]);
+  const hasConfiguredPassphrase = workspaceOwner
+    ? Boolean(await configuredBackupPassphrase())
+    : true;
   // Same cookie the root layout renders onto <html>; passing it down means the
   // theme picker highlights the right button in the first paint.
   const themeCookie = (await cookies()).get("keel-theme")?.value;
@@ -46,23 +72,27 @@ export default async function SettingsPage() {
         role: ctx.role,
         backupEnabled: ctx.workspace.backupEnabled,
         backupIntervalHours: ctx.workspace.backupIntervalHours,
-        // Host filesystem layout, both of them - see the note above.
+        // A configured custom directory belongs to the workspace. The resolved
+        // default is machine information and stays instance-owner-only.
         backupDir: workspaceOwner ? ctx.workspace.backupDir : null,
-        backupResolvedDir: workspaceOwner ? backupDirFor(ctx.workspace) : "",
+        backupResolvedDir: workspaceOwner && instanceOwner ? backupDirFor(ctx.workspace) : "",
         backupKeep: ctx.workspace.backupKeep,
         backupEncrypt: ctx.workspace.backupEncrypt,
         // When and why the machine last wrote a file, and raw provider text.
         lastBackupAt: workspaceOwner ? ctx.workspace.lastBackupAt?.toISOString() ?? null : null,
         lastBackupError: workspaceOwner ? ctx.workspace.lastBackupError : null,
-        // Whether the server has a backup passphrase in its env. False renders an
-        // instruction to edit the server's .env, which is the operator's
-        // business and no one else's; true is the branch that renders nothing,
-        // and the prop's only other use ("Back up now" prompting for a
-        // passphrase) belongs to an action members cannot take anyway.
-        hasEnvPassphrase: workspaceOwner ? Boolean(envBackupPassphrase()) : true,
+        // Only availability crosses this server/client boundary. The managed
+        // value and any environment override remain write-only host secrets.
+        hasScheduledPassphrase: hasConfiguredPassphrase,
       }}
-      account={{ username: ctx.user.username ?? ctx.user.email.split("@")[0] }}
+      account={{
+        username: ctx.user.username ?? ctx.user.email.split("@")[0],
+        email: ctx.user.email,
+        googleLinked: Boolean(ctx.user.googleId),
+        googleLinkResult,
+      }}
       isInstanceOwner={instanceOwner}
+      claimRequired={claimStatus.required}
       theme={theme}
       hasPassword={Boolean(ctx.user.passwordHash)}
       backups={backups}
@@ -71,8 +101,8 @@ export default async function SettingsPage() {
       cloud={{
         provider: ctx.workspace.cloudProvider,
         email: ctx.workspace.cloudEmail,
-        googleReady: googleConfigured(),
-        microsoftReady: microsoftConfigured(),
+        googleReady,
+        microsoftReady,
       }}
       oneNote={{
         connected: Boolean(ctx.workspace.oneNoteRefreshToken),
@@ -80,7 +110,7 @@ export default async function SettingsPage() {
         enabled: ctx.workspace.oneNoteEnabled,
         lastSyncAt: ctx.workspace.oneNoteLastSyncAt?.toISOString() ?? null,
         lastError: ctx.workspace.oneNoteLastError,
-        microsoftReady: microsoftConfigured(),
+        microsoftReady,
       }}
       // Operator information, not workspace information: a stale or unverified
       // schema is a property of the install. Owner-only for the same reason
@@ -92,6 +122,8 @@ export default async function SettingsPage() {
           ? {
               allowedEmails: access.allowedEmails,
               signupDisabled: access.signupDisabled,
+              allowedEmailsLocked: access.allowedEmailsLocked,
+              signupLocked: access.signupLocked,
               envLocked: access.envLocked,
               ownerEmail: ctx.user.email,
             }

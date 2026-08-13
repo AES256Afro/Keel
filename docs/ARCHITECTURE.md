@@ -100,7 +100,9 @@ SQLite and PostgreSQL.
   workspace backup files, download/upload export, restore, and page duplication
   (snapshot a subtree → restore with fresh IDs). Restores are non-destructive.
 - **Encryption** - AES-256-GCM with scrypt KDF (`.keelbak` envelope). Scheduled
-  encrypted backups read `KEEL_BACKUP_PASSPHRASE`; manual ones accept a passphrase.
+  encrypted backups use the instance owner's write-only managed passphrase, with
+  `KEEL_BACKUP_PASSPHRASE` taking priority as a locked host override. Manual
+  backups accept a passphrase for that backup.
 - **Scheduler & crash safety** (`src/lib/server-init.ts`, kicked off lazily from
   the first server-side request via `ensureServerInit()` in `src/lib/auth.ts` -
   not a Next.js instrumentation hook, because `next dev` also bundles
@@ -108,8 +110,8 @@ SQLite and PostgreSQL.
   SQLite WAL mode and runs due backups every 5 minutes. WAL journal mode is
   persistent in the database file, so lazy init does not weaken crash safety. Backup writes are atomic (tmp file + rename) and pruned to
   `backupKeep`. The backup folder is configurable per workspace; pointing it at a
-  OneDrive/Google Drive-synced folder gives off-site copies without OAuth. Direct
-  cloud-API upload is a roadmap item.
+  OneDrive/Google Drive-synced folder gives off-site copies without OAuth. Keel
+  also supports direct Google Drive, OneDrive, Azure Blob, and R2 uploads.
 - **Theming** - semantic CSS variables in `globals.css` with three modes:
   explicit light/dark (`data-theme` on `<html>`) or system
   (`prefers-color-scheme`). The choice is stored in a cookie and rendered by
@@ -181,18 +183,22 @@ both platforms in CI and attaches artifacts (releases on `v*` tags).
 - **OAuth** (`src/lib/oauth.ts`) - plain authorization-code flow over fetch,
   no SDK. Google powers sign-in (`openid email profile`) and Drive backups
   (`drive.file` - app-created files only); Microsoft powers OneDrive backups
-  (`Files.ReadWrite.AppFolder` - app folder only). Configured entirely via
-  env vars; every button/flow hides itself when credentials are absent.
-- **Sign-in** - `/api/auth/google` → callback finds the user by googleId or
-  email (auto-linking password accounts), provisioning new users through the
-  same `provisionUser` path as registration (workspace, welcome page,
-  invite conversion). `passwordHash` is nullable for Google-only accounts.
+  (`Files.ReadWrite.AppFolder` - app folder only). The instance owner may save
+  encrypted client credentials in Settings, while environment values remain
+  higher-priority locked overrides.
+- **Sign-in** - `/api/auth/google` resolves Google's stable subject and verified
+  email together. It never auto-links a password account based only on matching
+  email; a signed-in account-self link flow proves both sides explicitly.
+  `passwordHash` is nullable for Google-only accounts.
 - **Cloud storage** (`src/lib/cloud.ts`) - provider-agnostic upload/list/
   download. `runBackup` uploads each backup after writing it locally; upload
   failures surface in Settings without failing the backup. Restore downloads
-  from the drive and feeds the standard snapshot-restore path. Refresh tokens
-  are stored on the workspace row (owner-connected); Microsoft's rotating
-  refresh tokens are persisted on each use.
+  from the drive and feeds the standard snapshot-restore path. Refresh tokens,
+  OneNote tokens, Azure SAS URLs, and R2 keys use AES-256-GCM envelopes in the
+  existing workspace columns. AAD binds each envelope to its workspace,
+  provider, purpose, and envelope version. The master key stays outside the
+  database. Legacy plaintext is atomically encrypted before first use, and
+  provider-rotated tokens are written back only as ciphertext.
 
 ## Version 1 target - status
 

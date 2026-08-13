@@ -32,6 +32,12 @@ const bodyOf = async (req) => {
   return Buffer.concat(chunks);
 };
 
+const exists = async (filePath) =>
+  fs.stat(filePath).then(
+    () => true,
+    () => false
+  );
+
 const temp = await fs.mkdtemp(path.join(os.tmpdir(), "keel-cloud-transfer-"));
 const source = path.join(temp, "keel-test-2026-08-13T00-00-00.json");
 const destination = path.join(temp, "download.json");
@@ -101,8 +107,93 @@ try {
     accessKeyId: "test-key",
     secretKey: "test-secret",
   };
-  const { normalizeR2Config, r2Download, r2List, r2Upload, writeCloudResponseToFile } = await import(
-    pathToFileURL(path.join(root, "src/lib/cloud.ts")).href
+  const {
+    CloudBackupTooLargeError,
+    downloadCloudBackupToFile,
+    normalizeR2Config,
+    r2Download,
+    r2List,
+    r2Upload,
+    writeCloudResponseToFile,
+  } = await import(pathToFileURL(path.join(root, "src/lib/cloud.ts")).href);
+
+  console.log("\nCloud restore download limits\n");
+  const maxBytes = 64;
+  const declaredOversizeDestination = path.join(temp, "declared-oversize.json");
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  let declaredOversizeError;
+  globalThis.fetch = async (...args) => {
+    fetchCalls++;
+    return originalFetch(...args);
+  };
+  try {
+    await downloadCloudBackupToFile(
+      {
+        id: "test-workspace",
+        cloudProvider: "r2",
+        cloudRefreshToken: "unused",
+        cloudFolderId: null,
+      },
+      "keel-backups/declared-oversize.json",
+      declaredOversizeDestination,
+      { declaredSize: maxBytes + 1, maxBytes }
+    );
+  } catch (err) {
+    declaredOversizeError = err;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  check(
+    "a declared oversized backup is refused before provider fetch",
+    declaredOversizeError instanceof CloudBackupTooLargeError && fetchCalls === 0,
+    `${declaredOversizeError?.message ?? "no error"}; ${fetchCalls} fetch calls`
+  );
+  check(
+    "a declared oversized backup creates no output file",
+    !(await exists(declaredOversizeDestination))
+  );
+
+  const exerciseStreamingLimit = async (name, headers) => {
+    const output = path.join(temp, `${name}.json`);
+    let cancelled = false;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(maxBytes + 1));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    let error;
+    try {
+      await writeCloudResponseToFile(new Response(body, { headers }), output, maxBytes);
+    } catch (err) {
+      error = err;
+    }
+    check(
+      `${name} stream is stopped at the byte cap`,
+      error instanceof CloudBackupTooLargeError && cancelled,
+      `${error?.message ?? "no error"}; cancelled=${cancelled}`
+    );
+    check(`${name} partial output is removed`, !(await exists(output)));
+  };
+
+  await exerciseStreamingLimit("unknown-size", {});
+  await exerciseStreamingLimit("false-size", { "Content-Length": "0" });
+
+  const normalDestination = path.join(temp, "within-limit.json");
+  const normalBytes = Buffer.from("KEEL-CLOUD-WITHIN-LIMIT");
+  await writeCloudResponseToFile(
+    new Response(normalBytes, {
+      headers: { "Content-Length": String(normalBytes.length) },
+    }),
+    normalDestination,
+    maxBytes
+  );
+  check(
+    "a normal stream below the byte cap is written intact",
+    (await fs.readFile(normalDestination)).equals(normalBytes)
   );
 
   console.log("\nMultipart cloud transfer\n");

@@ -6,17 +6,52 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { load } from "cheerio";
+import { attachmentQuotaBytes } from "@/lib/attachments";
+import { MAX_RESTORED_CONTENT } from "@/lib/limits";
 import { prisma } from "@/lib/prisma";
 import { microsoftUserInfo, ONENOTE_SCOPE, refreshAccessToken } from "@/lib/oauth";
+import {
+  loadWorkspaceCredential,
+  rotateWorkspaceCredential,
+} from "@/lib/workspace-secrets";
+import {
+  withWorkspaceStorageLock,
+  workspaceAssetsDir,
+  workspaceStorageUsage,
+} from "@/lib/workspace-storage";
 
 const GRAPH = "https://graph.microsoft.com/v1.0/me/onenote";
+const GRAPH_ORIGIN = "https://graph.microsoft.com";
+const GRAPH_FETCH_TIMEOUT_MS = 30_000;
+const GRAPH_FETCH_ATTEMPTS = 5;
+const MAX_GRAPH_IMAGE_BYTES = 40 * 1024 * 1024;
+const MAX_ONENOTE_SYNC_IMAGE_BYTES = 256 * 1024 * 1024;
+const MAX_ONENOTE_SYNC_IMAGE_COUNT = 1_000;
+const MAX_ONENOTE_PERSISTED_IMAGE_COUNT = 10_000;
+
+/** Resolve the only origin that may receive a Microsoft Graph bearer token. */
+function graphUrl(url: string): URL {
+  try {
+    const parsed = new URL(url);
+    if (
+      parsed.origin !== GRAPH_ORIGIN ||
+      parsed.username !== "" ||
+      parsed.password !== ""
+    ) {
+      throw new Error("untrusted origin");
+    }
+    return parsed;
+  } catch {
+    throw new Error("Microsoft Graph URL must use https://graph.microsoft.com");
+  }
+}
 
 /** True only for https URLs on graph.microsoft.com - the one host the victim's
  *  access token may ever be sent to. */
 function isGraphImageUrl(url: string): boolean {
   try {
-    const parsed = new URL(url);
-    return parsed.protocol === "https:" && parsed.hostname === "graph.microsoft.com";
+    graphUrl(url);
+    return true;
   } catch {
     return false;
   }
@@ -53,18 +88,124 @@ export type OneNoteSyncResult = {
   imagesRemoved: number;
 };
 
-function uploadsDir(workspaceId: string) {
-  const root =
-    process.env.NOPIN_UPLOAD_DIR ||
-    path.join(/* turbopackIgnore: true */ process.cwd(), "uploads");
-  return path.join(/* turbopackIgnore: true */ root, workspaceId);
+export type OneNoteImageBudget = {
+  workspaceId: string;
+  maxNewBytes: number;
+  maxNewFiles: number;
+  maxPersistedBytes: number;
+  maxPersistedFiles: number;
+  newBytes: number;
+  newFiles: number;
+  persistedBytes: number;
+  oneNoteBytes: number;
+  includeAttachmentBytes: boolean;
+  stoppedReason: string | null;
+  knownFiles: Set<string>;
+  localizedSources: Map<string, string | null>;
+};
+
+type OneNoteImageBudgetLimits = {
+  maxNewBytes?: number;
+  maxNewFiles?: number;
+  maxPersistedBytes?: number;
+  maxPersistedFiles?: number;
+};
+
+function imageBudgetLimit(value: number, name: string): number {
+  const normalized = Math.floor(value);
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return normalized;
 }
 
-async function graphFetch(accessToken: string, url: string, binary = false) {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (res.ok) return binary ? res : res;
+function isMissingFile(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === "ENOENT";
+}
+
+/** One budget is created for the whole sync and passed to every page. Existing
+ *  hash-named assets count toward the persisted ceiling, but never toward the
+ *  per-sync limits. */
+export async function createOneNoteImageBudget(
+  workspaceId: string,
+  limits: OneNoteImageBudgetLimits = {}
+): Promise<OneNoteImageBudget> {
+  const maxNewBytes = imageBudgetLimit(
+    limits.maxNewBytes ?? MAX_ONENOTE_SYNC_IMAGE_BYTES,
+    "OneNote per-sync image byte limit"
+  );
+  const maxNewFiles = imageBudgetLimit(
+    limits.maxNewFiles ?? MAX_ONENOTE_SYNC_IMAGE_COUNT,
+    "OneNote per-sync image count limit"
+  );
+  const maxPersistedBytes = imageBudgetLimit(
+    limits.maxPersistedBytes ?? attachmentQuotaBytes(),
+    "OneNote persisted image byte limit"
+  );
+  const maxPersistedFiles = imageBudgetLimit(
+    limits.maxPersistedFiles ?? MAX_ONENOTE_PERSISTED_IMAGE_COUNT,
+    "OneNote persisted image count limit"
+  );
+  const includeAttachmentBytes = limits.maxPersistedBytes === undefined;
+  const usage = await withWorkspaceStorageLock(workspaceId, () =>
+    workspaceStorageUsage(workspaceId, { includeAttachments: includeAttachmentBytes })
+  );
+  return {
+    workspaceId,
+    maxNewBytes,
+    maxNewFiles,
+    maxPersistedBytes,
+    maxPersistedFiles,
+    newBytes: 0,
+    newFiles: 0,
+    persistedBytes: usage.totalBytes,
+    oneNoteBytes: usage.oneNoteBytes,
+    includeAttachmentBytes,
+    stoppedReason: null,
+    knownFiles: usage.oneNoteNames,
+    localizedSources: new Map(),
+  };
+}
+
+export async function graphFetch(
+  accessToken: string,
+  url: string,
+  options: { timeoutMs?: number; attempts?: number } = {}
+) {
+  // Validate before constructing the Authorization-bearing request. Disabling
+  // automatic redirects keeps fetch from following that request to a second,
+  // unvalidated origin.
+  const target = graphUrl(url).toString();
+  const timeoutMs = options.timeoutMs ?? GRAPH_FETCH_TIMEOUT_MS;
+  const attempts = options.attempts ?? GRAPH_FETCH_ATTEMPTS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error("Microsoft Graph timeout must be a positive integer");
+  }
+  if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > GRAPH_FETCH_ATTEMPTS) {
+    throw new Error(`Microsoft Graph attempts must be between 1 and ${GRAPH_FETCH_ATTEMPTS}`);
+  }
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const signal = AbortSignal.timeout(timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(target, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        redirect: "error",
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted) {
+        throw new Error(`Microsoft Graph request timed out after ${timeoutMs} ms`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+    if (res.ok) return res;
     if (res.status === 429 || res.status >= 500) {
+      await res.body?.cancel().catch(() => undefined);
+      if (attempt + 1 === attempts) break;
       await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt));
       continue;
     }
@@ -74,16 +215,127 @@ async function graphFetch(accessToken: string, url: string, binary = false) {
   throw new Error("Microsoft Graph did not recover after retries");
 }
 
-async function graphList<T>(accessToken: string, initialUrl: string): Promise<T[]> {
+export async function graphList<T>(accessToken: string, initialUrl: string): Promise<T[]> {
   const rows: T[] = [];
-  let url: string | undefined = initialUrl;
+  let url: string | undefined = graphUrl(initialUrl).toString();
   while (url) {
     const res = await graphFetch(accessToken, url);
     const data = (await res.json()) as GraphPage<T>;
     rows.push(...(data.value ?? []));
-    url = data["@odata.nextLink"];
+    const next = data["@odata.nextLink"];
+    // Validate pagination metadata as soon as it crosses the trust boundary,
+    // before the next request has any opportunity to attach the bearer token.
+    url = next ? graphUrl(next).toString() : undefined;
   }
   return rows;
+}
+
+export class GraphImageTooLargeError extends Error {
+  constructor(maxBytes: number) {
+    super(`Microsoft Graph image exceeds the ${maxBytes}-byte limit`);
+    this.name = "GraphImageTooLargeError";
+  }
+}
+
+/** Read an image with both a declared-size check and an enforced streaming cap.
+ *  Exported so the security regression can exercise chunked responses with a
+ *  small limit without allocating a real 40 MB fixture. */
+export async function readGraphImageBody(
+  response: Response,
+  maxBytes = MAX_GRAPH_IMAGE_BYTES
+): Promise<Buffer> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new Error("Microsoft Graph image limit must be a positive integer");
+  }
+
+  const declared = response.headers.get("content-length");
+  if (declared !== null) {
+    if (!/^\d+$/.test(declared)) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error("Microsoft Graph returned an invalid Content-Length");
+    }
+    const declaredBytes = Number(declared);
+    if (!Number.isSafeInteger(declaredBytes)) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error("Microsoft Graph returned an invalid Content-Length");
+    }
+    if (declaredBytes > maxBytes) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new GraphImageTooLargeError(maxBytes);
+    }
+  }
+
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new GraphImageTooLargeError(maxBytes);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
+
+export class OneNotePageTooLargeError extends Error {
+  constructor(kind: "HTML" | "converted content", maximum: number) {
+    const unit = kind === "HTML" ? "byte" : "character";
+    super(`OneNote page ${kind} exceeds the ${maximum}-${unit} limit`);
+    this.name = "OneNotePageTooLargeError";
+  }
+}
+
+/** Read page HTML without trusting Graph's Content-Length. The declared check
+ *  avoids starting a known-oversized body and the streamed check covers
+ *  missing, compressed, or false metadata. */
+export async function readOneNotePageHtml(
+  response: Response,
+  maxBytes = MAX_RESTORED_CONTENT
+): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new Error("OneNote page HTML limit must be a positive integer");
+  }
+
+  const declared = response.headers.get("content-length");
+  if (declared !== null) {
+    if (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared))) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error("Microsoft Graph returned an invalid Content-Length");
+    }
+    if (Number(declared) > maxBytes) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new OneNotePageTooLargeError("HTML", maxBytes);
+    }
+  }
+
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new OneNotePageTooLargeError("HTML", maxBytes);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total).toString("utf8");
 }
 
 async function upsertMirrorPage(input: {
@@ -293,18 +545,73 @@ function blockNodes($: ReturnType<typeof load>, parent: any): any[] {
   return blocks;
 }
 
-async function localizeImages(
+async function existingOneNoteAsset(
+  target: string,
+  filename: string,
+  budget: OneNoteImageBudget
+): Promise<boolean> {
+  try {
+    const file = await fs.stat(target);
+    if (!file.isFile()) return false;
+    if (!budget.knownFiles.has(filename)) {
+      budget.knownFiles.add(filename);
+      budget.oneNoteBytes += file.size;
+      budget.persistedBytes += file.size;
+    }
+    return true;
+  } catch (error) {
+    if (isMissingFile(error)) return false;
+    throw error;
+  }
+}
+
+function canWriteOneNoteAsset(bytes: number, budget: OneNoteImageBudget): boolean {
+  if (budget.stoppedReason) return false;
+  let reason: string | null = null;
+  if (budget.newFiles >= budget.maxNewFiles) {
+    reason = `new image count reached ${budget.maxNewFiles}`;
+  } else if (budget.newBytes + bytes > budget.maxNewBytes) {
+    reason = `new image bytes would exceed ${budget.maxNewBytes}`;
+  } else if (budget.persistedBytes + bytes > budget.maxPersistedBytes) {
+    reason = `persisted image bytes would exceed ${budget.maxPersistedBytes}`;
+  } else if (budget.knownFiles.size >= budget.maxPersistedFiles) {
+    reason = `persisted image count reached ${budget.maxPersistedFiles}`;
+  }
+  if (!reason) return true;
+  budget.stoppedReason = reason;
+  console.warn(`[keel] onenote: ${reason}; skipping further new image writes this sync`);
+  return false;
+}
+
+/** Localize one page's images under the budget shared by the entire sync.
+ *  Images are fetched sequentially and each response is already capped at
+ *  40 MiB, so only one bounded image is resident at a time. The shared byte,
+ *  count, and persisted-storage ceilings bound the aggregate availability
+ *  risk without adding a second temporary-file lifecycle here. */
+export async function localizeImages(
   accessToken: string,
   workspaceId: string,
-  html: string
+  html: string,
+  budget: OneNoteImageBudget
 ): Promise<{ html: string; downloaded: number }> {
+  if (budget.workspaceId !== workspaceId) {
+    throw new Error("OneNote image budget belongs to a different workspace");
+  }
   const $ = load(html);
-  const outputDir = uploadsDir(workspaceId);
+  const outputDir = workspaceAssetsDir(workspaceId);
   await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
   let downloaded = 0;
   for (const image of $("img").toArray()) {
     const source = $(image).attr("data-fullres-src") || $(image).attr("src");
     if (!source || source.startsWith("data:")) continue;
+    if (budget.localizedSources.has(source)) {
+      const localized = budget.localizedSources.get(source);
+      if (localized) {
+        $(image).attr("src", localized);
+        $(image).removeAttr("data-fullres-src");
+      }
+      continue;
+    }
     // The victim's live Graph access token is attached to this fetch. Only ever
     // send it to Microsoft Graph itself: a shared notebook could carry an <img>
     // pointing at an attacker's host, and following it would hand that host a
@@ -313,14 +620,19 @@ async function localizeImages(
     // is never a legitimate OneNote image.
     if (!isGraphImageUrl(source)) {
       console.warn(`[keel] onenote: skipping non-Graph image URL ${source.slice(0, 80)}`);
+      budget.localizedSources.set(source, null);
       continue;
     }
-    const res = await graphFetch(accessToken, source, true);
-    // Cap what we'll pull down - an unbounded image would fill the disk and the
-    // Node heap. 40 MB is far past any real OneNote capture.
-    const bytes = Buffer.from(await res.arrayBuffer());
-    if (bytes.length > 40 * 1024 * 1024) {
+    const res = await graphFetch(accessToken, source);
+    // Enforce the cap while the body is still on the wire. Checking only after
+    // arrayBuffer() would let a chunked response exhaust the Node heap first.
+    let bytes: Buffer;
+    try {
+      bytes = await readGraphImageBody(res);
+    } catch (error) {
+      if (!(error instanceof GraphImageTooLargeError)) throw error;
       console.warn(`[keel] onenote: image exceeds 40 MB, skipping`);
+      budget.localizedSources.set(source, null);
       continue;
     }
     const mime = res.headers.get("content-type")?.split(";")[0] || $(image).attr("data-src-type") || "";
@@ -331,13 +643,61 @@ async function localizeImages(
     const digest = crypto.createHash("sha256").update(bytes).digest("hex");
     const filename = `onenote-${digest}${extension}`;
     const target = path.join(/* turbopackIgnore: true */ outputDir, filename);
-    try {
-      await fs.access(target);
-    } catch {
-      await fs.writeFile(target, bytes, { mode: 0o600 });
-      downloaded++;
+    const localized = `/api/assets/${filename}`;
+    let stored = await existingOneNoteAsset(target, filename, budget);
+    if (!stored) {
+      stored = await withWorkspaceStorageLock(workspaceId, async () => {
+        // Recheck after acquiring the same lock used by ordinary uploads. A
+        // concurrent sync may have written this hash while this response was
+        // being downloaded; that is a free dedupe hit, even after a budget has
+        // stopped further new writes.
+        if (await existingOneNoteAsset(target, filename, budget)) return true;
+
+        // The initial budget is only a fast summary. The final quota decision
+        // is made again under the shared lock immediately before every write,
+        // so a database attachment upload cannot race this filesystem asset.
+        const usage = await workspaceStorageUsage(workspaceId, {
+          includeAttachments: budget.includeAttachmentBytes,
+          // The factory scans the filesystem once and every successful write
+          // updates this snapshot under the same lock. Reusing it avoids an
+          // O(images x existing files) stat storm while the database side is
+          // still re-aggregated for every cross-store quota decision.
+          oneNoteUsage: {
+            bytes: budget.oneNoteBytes,
+            names: budget.knownFiles,
+          },
+        });
+        budget.persistedBytes = usage.totalBytes;
+        budget.oneNoteBytes = usage.oneNoteBytes;
+        budget.knownFiles = usage.oneNoteNames;
+        if (!canWriteOneNoteAsset(bytes.length, budget)) return false;
+
+        try {
+          await fs.writeFile(target, bytes, { mode: 0o600, flag: "wx" });
+        } catch (error) {
+          // Another process does not share this in-memory lock, so retain wx
+          // and treat an externally won hash write as dedupe too.
+          if ((error as NodeJS.ErrnoException)?.code === "EEXIST") {
+            return existingOneNoteAsset(target, filename, budget);
+          }
+          await fs.unlink(target).catch(() => undefined);
+          throw error;
+        }
+        budget.knownFiles.add(filename);
+        budget.newBytes += bytes.length;
+        budget.newFiles++;
+        budget.oneNoteBytes += bytes.length;
+        budget.persistedBytes += bytes.length;
+        downloaded++;
+        return true;
+      });
+      if (!stored) {
+        budget.localizedSources.set(source, null);
+        continue;
+      }
     }
-    $(image).attr("src", `/api/assets/${filename}`);
+    budget.localizedSources.set(source, localized);
+    $(image).attr("src", localized);
     $(image).removeAttr("data-fullres-src");
   }
   return { html: $.html(), downloaded };
@@ -346,10 +706,23 @@ async function localizeImages(
 /** Exported for the regression check in scripts/links-check.mjs, which feeds it
  *  pathologically nested HTML and asserts it returns instead of throwing, and
  *  feeds it wrapped images and asserts each one is emitted exactly once. */
-export function htmlToTipTap(html: string) {
+export function htmlToTipTap(
+  html: string,
+  maxContentLength = MAX_RESTORED_CONTENT
+) {
+  if (!Number.isSafeInteger(maxContentLength) || maxContentLength < 1) {
+    throw new Error("OneNote converted content limit must be a positive integer");
+  }
   const $ = load(html);
   const content = blockNodes($, $("body").get(0) ?? $.root().get(0));
-  return JSON.stringify({ type: "doc", content: content.length ? content : [{ type: "paragraph" }] });
+  const converted = JSON.stringify({
+    type: "doc",
+    content: content.length ? content : [{ type: "paragraph" }],
+  });
+  if (converted.length > maxContentLength) {
+    throw new OneNotePageTooLargeError("converted content", maxContentLength);
+  }
+  return converted;
 }
 
 async function cleanupImages(workspaceId: string) {
@@ -363,7 +736,7 @@ async function cleanupImages(workspaceId: string) {
       referenced.add(match[1]);
     }
   }
-  const dir = uploadsDir(workspaceId);
+  const dir = workspaceAssetsDir(workspaceId);
   let removed = 0;
   for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
     if (name.startsWith("onenote-") && !referenced.has(name)) {
@@ -377,13 +750,17 @@ async function cleanupImages(workspaceId: string) {
 async function performSync(workspaceId: string): Promise<OneNoteSyncResult> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
   if (!workspace?.oneNoteRefreshToken) throw new Error("OneNote is not connected");
-  const token = await refreshAccessToken("onedrive", workspace.oneNoteRefreshToken, ONENOTE_SCOPE);
-  if (token.refresh_token && token.refresh_token !== workspace.oneNoteRefreshToken) {
-    await prisma.workspace.update({
-      where: { id: workspaceId },
-      data: { oneNoteRefreshToken: token.refresh_token },
-    });
+  const credential = await loadWorkspaceCredential(workspace, "oneNote");
+  const token = await refreshAccessToken("onedrive", credential.value, ONENOTE_SCOPE);
+  if (token.refresh_token && token.refresh_token !== credential.value) {
+    await rotateWorkspaceCredential(
+      workspaceId,
+      "oneNote",
+      credential.storedValue,
+      token.refresh_token
+    );
   }
+  const imageBudget = await createOneNoteImageBudget(workspaceId);
 
   const notebooks = await graphList<Notebook>(
     token.access_token,
@@ -480,7 +857,8 @@ async function performSync(workspaceId: string): Promise<OneNoteSyncResult> {
         const localized = await localizeImages(
           token.access_token,
           workspaceId,
-          await contentResponse.text()
+          await readOneNotePageHtml(contentResponse),
+          imageBudget
         );
         content = htmlToTipTap(localized.html);
         downloaded = localized.downloaded;

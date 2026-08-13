@@ -6,10 +6,11 @@
 //
 //   keel start [--port 3000] [--foreground]
 //   keel stop | status | logs
-//   keel export <file>          portable copy of the whole notebook
-//   keel import <file>          restore a copy (backs up current first)
+//   keel export <file>          portable database plus managed-secret companion
+//   keel import <file>          restore that bundle (backs up current first)
 //   keel to-docker [dir]        generate a Docker deployment from this install
 //   keel update [--check]       update this install in place
+//   keel claim <token>          prove machine control and claim administration
 //   keel paths                  where everything lives
 //
 // Data lives in KEEL_HOME (default ~/.keel): the database, the env file, the
@@ -17,10 +18,11 @@
 // which is exactly what makes `keel update` a directory swap.
 
 import { spawn, spawnSync } from "child_process";
+import { randomBytes } from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const CLI_DIR = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.resolve(CLI_DIR, "..");
@@ -31,6 +33,8 @@ const LOG_FILE = path.join(HOME, "keel.log");
 const ENV_FILE = path.join(HOME, ".env");
 const DB_FILE = path.join(HOME, "keel.db");
 const UPLOADS_DIR = path.join(HOME, "uploads");
+const MANAGED_SECRET_KEY_FILE = ".keel-server-secrets.key";
+const MANAGED_SECRET_KEY_PATH = path.join(HOME, MANAGED_SECRET_KEY_FILE);
 const REPO = "AES256Afro/Keel";
 
 const pkg = JSON.parse(fs.readFileSync(path.join(APP_DIR, "package.json"), "utf8"));
@@ -45,7 +49,12 @@ const die = (msg) => {
 };
 
 function ensureHome() {
+  // Keep every runtime file created by this process private, including
+  // SQLite's WAL/SHM companions, which Prisma creates after the CLI starts
+  // the server. Windows permissions are established by its installer.
+  if (process.platform !== "win32") process.umask(0o077);
   fs.mkdirSync(HOME, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") fs.chmodSync(HOME, 0o700);
   if (!fs.existsSync(ENV_FILE)) {
     fs.writeFileSync(
       ENV_FILE,
@@ -54,9 +63,23 @@ function ensureHome() {
 # KEEL_BACKUP_PASSPHRASE=
 # KEEL_ALLOWED_EMAILS=you@example.com
 # KEEL_DISABLE_SIGNUP=1
+KEEL_CLAIM_REQUIRED=1
 `,
       { mode: 0o600 }
     );
+  }
+}
+
+function ensurePrivateDatabaseFile() {
+  // Prisma creates a missing SQLite file using the caller's umask. On a
+  // typical 022 shell that leaves the notebook database readable by other
+  // local accounts. Reserve it ourselves with a private mode before the
+  // migrator starts, and repair older CLI-created files on each command.
+  const database = fs.openSync(DB_FILE, "a", 0o600);
+  try {
+    if (process.platform !== "win32") fs.fchmodSync(database, 0o600);
+  } finally {
+    fs.closeSync(database);
   }
 }
 
@@ -257,6 +280,7 @@ async function cmdStart(args) {
     );
   }
   ensureHome();
+  ensurePrivateDatabaseFile();
   const portFlag = args.indexOf("--port");
   const port = portFlag >= 0 ? Number(args[portFlag + 1]) : portOf();
   const foreground = args.includes("--foreground");
@@ -302,7 +326,8 @@ async function cmdStart(args) {
 
   // Detached, with a tiny supervisor loop: exit code 87 is the in-app
   // restart asking to be brought back.
-  const log = fs.openSync(LOG_FILE, "a");
+  const log = fs.openSync(LOG_FILE, "a", 0o600);
+  if (process.platform !== "win32") fs.fchmodSync(log, 0o600);
   const script = `
     let restarts = 0;
     const boot = () => {
@@ -477,7 +502,12 @@ function cmdLogs(args) {
 // command with a raw stack, leaving a half-made bundle that looks finished.
 // Unreadable and vanished entries are skipped by name instead, and the tally
 // comes back so the caller can say plainly that the copy is incomplete.
-function copyTreeDereferenced(src, dst, state = { copied: 0, skipped: [], seen: new Set() }) {
+function copyTreeDereferenced(
+  src,
+  dst,
+  state = { copied: 0, skipped: [], seen: new Set() },
+  modes = null
+) {
   const skip = (target, err) => {
     // A dangling symlink and a file removed mid-walk both report ENOENT; both
     // mean "no bytes here to preserve". Anything else is a permission wall.
@@ -498,17 +528,19 @@ function copyTreeDereferenced(src, dst, state = { copied: 0, skipped: [], seen: 
       const real = fs.realpathSync(src);
       if (state.seen.has(real)) return state;
       state.seen.add(real);
-      fs.mkdirSync(dst, { recursive: true });
+      fs.mkdirSync(dst, { recursive: true, ...(modes ? { mode: modes.directory } : {}) });
+      if (modes && process.platform !== "win32") fs.chmodSync(dst, modes.directory);
       entries = fs.readdirSync(src);
     } catch (err) {
       return skip(`${src}${path.sep}`, err);
     }
     for (const entry of entries) {
-      copyTreeDereferenced(path.join(src, entry), path.join(dst, entry), state);
+      copyTreeDereferenced(path.join(src, entry), path.join(dst, entry), state, modes);
     }
   } else {
     try {
       fs.copyFileSync(src, dst);
+      if (modes && process.platform !== "win32") fs.chmodSync(dst, modes.file);
       state.copied++;
     } catch (err) {
       return skip(src, err);
@@ -525,6 +557,194 @@ function reportSkipped(state, what) {
   say(`⚠ ${what} is INCOMPLETE - ${state.copied} file(s) copied, ${state.skipped.length} skipped:`);
   for (const entry of state.skipped.slice(0, 10)) say(`    ${entry}`);
   if (state.skipped.length > 10) say(`    …and ${state.skipped.length - 10} more`);
+}
+
+// Credentials saved from Settings, including OAuth, workspace cloud, and
+// scheduled-backup secrets, are ciphertext inside SQLite. Their 32-byte master
+// key deliberately lives outside the database. Portable database operations
+// therefore carry one separately named sibling:
+//
+//   notes.db
+//   notes.db.keel-server-secrets.key
+//
+// Naming the companion after the database lets exports from different Keel
+// instances coexist in one directory without one hidden file silently replacing
+// another. The live server still uses .keel-server-secrets.key beside keel.db.
+function portableManagedSecretKeyPath(databasePath) {
+  return `${databasePath}.keel-server-secrets.key`;
+}
+
+function lstatIfPresent(file) {
+  try {
+    return fs.lstatSync(file);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function decodeManagedSecretKey(value) {
+  const text = String(value).trim();
+  let key;
+  if (/^[a-fA-F0-9]{64}$/.test(text)) key = Buffer.from(text, "hex");
+  else if (/^[A-Za-z0-9_-]{43}$/.test(text)) key = Buffer.from(text, "base64url");
+  else if (/^[A-Za-z0-9+/]{43}=$/.test(text)) key = Buffer.from(text, "base64");
+  else throw new Error("the managed-secret key is not a supported 32-byte encoding");
+  if (key.length !== 32) throw new Error("the managed-secret key does not decode to 32 bytes");
+  return key;
+}
+
+function readManagedSecretKeyFile(file) {
+  const stat = lstatIfPresent(file);
+  if (!stat) return null;
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`managed-secret key must be a regular file, not a link: ${file}`);
+  }
+  if (stat.size > 256) throw new Error(`managed-secret key file is unexpectedly large: ${file}`);
+  if (process.platform !== "win32") {
+    if ((stat.mode & 0o077) !== 0) {
+      throw new Error(`managed-secret key must be mode 0600: ${file}`);
+    }
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+      throw new Error(`managed-secret key must be owned by the current user: ${file}`);
+    }
+  }
+  return decodeManagedSecretKey(fs.readFileSync(file, "utf8"));
+}
+
+function environmentFileValues() {
+  const values = { ...process.env };
+  let contents = "";
+  try {
+    contents = fs.readFileSync(ENV_FILE, "utf8");
+  } catch {}
+  // Match the standalone server's intentionally small .env reader. Process
+  // environment always wins, and the first occurrence in the file wins.
+  for (const line of contents.split(/\r?\n/)) {
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
+    if (!match || line.trim().startsWith("#") || values[match[1]] !== undefined) continue;
+    values[match[1]] = match[2].replace(/^["']|["']$/g, "");
+  }
+  return values;
+}
+
+function effectiveManagedSecretKey() {
+  const values = environmentFileValues();
+  const configured =
+    (values.KEEL_SERVER_SECRET_KEY !== undefined && values.KEEL_SERVER_SECRET_KEY !== ""
+      ? values.KEEL_SERVER_SECRET_KEY
+      : undefined) ??
+    (values.NOPIN_SERVER_SECRET_KEY !== undefined && values.NOPIN_SERVER_SECRET_KEY !== ""
+      ? values.NOPIN_SERVER_SECRET_KEY
+      : undefined);
+  if (configured !== undefined) {
+    return { key: decodeManagedSecretKey(configured), source: "environment" };
+  }
+  const key = readManagedSecretKeyFile(MANAGED_SECRET_KEY_PATH);
+  return key ? { key, source: "file" } : null;
+}
+
+function incomingManagedSecretKey(databasePath) {
+  const paired = portableManagedSecretKeyPath(databasePath);
+  const colocated = path.join(path.dirname(path.resolve(databasePath)), MANAGED_SECRET_KEY_FILE);
+  // A database-specific export companion is authoritative. The hidden runtime
+  // filename is only a fallback for a copied Docker/data directory. Looking at
+  // both would make a pre-import backup inside KEEL_HOME conflict with the live
+  // key that replaced it, even though its named companion is unambiguous.
+  const pairedKey = readManagedSecretKeyFile(paired);
+  if (pairedKey) return { file: paired, key: pairedKey };
+  // The hidden runtime key belongs specifically to the runtime database name.
+  // Do not attach one directory-wide hidden key to an arbitrary legacy .db.
+  if (path.basename(databasePath) !== "keel.db") return null;
+  if (path.resolve(paired) === path.resolve(colocated)) return null;
+  const colocatedKey = readManagedSecretKeyFile(colocated);
+  return colocatedKey ? { file: colocated, key: colocatedKey } : null;
+}
+
+function inspectManagedSecretDestination(file, key, allowReplace) {
+  const stat = lstatIfPresent(file);
+  if (!stat) return "create";
+  const current = readManagedSecretKeyFile(file);
+  if (current.equals(key)) return "same";
+  if (!allowReplace) {
+    throw new Error(
+      `refusing to replace a different managed-secret key at ${file}; choose another target or remove that companion explicitly`
+    );
+  }
+  return "replace";
+}
+
+function rejectOrphanManagedSecretDestination(file) {
+  if (lstatIfPresent(file)) {
+    throw new Error(
+      `the source has no managed-secret key, but ${file} already exists; choose another target or remove that companion explicitly`
+    );
+  }
+}
+
+function syncDirectory(directory) {
+  let descriptor = null;
+  try {
+    descriptor = fs.openSync(directory, "r");
+    fs.fsyncSync(descriptor);
+  } catch {
+    // Windows and some network filesystems cannot fsync a directory. The key
+    // file itself was still fsynced before the atomic rename.
+  } finally {
+    if (descriptor !== null) fs.closeSync(descriptor);
+  }
+}
+
+function writeManagedSecretKey(file, key, allowReplace = false) {
+  const disposition = inspectManagedSecretDestination(file, key, allowReplace);
+  if (disposition === "same") {
+    if (process.platform !== "win32") fs.chmodSync(file, 0o600);
+    return disposition;
+  }
+
+  const parent = path.dirname(path.resolve(file));
+  const parentStat = fs.statSync(parent);
+  if (!parentStat.isDirectory()) throw new Error(`managed-secret key parent is not a directory: ${parent}`);
+  const temporary = path.join(
+    parent,
+    `.${path.basename(file)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`
+  );
+  let descriptor = null;
+  try {
+    descriptor = fs.openSync(temporary, "wx", 0o600);
+    if (process.platform !== "win32") fs.fchmodSync(descriptor, 0o600);
+    fs.writeFileSync(descriptor, `${key.toString("base64url")}\n`, "utf8");
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = null;
+
+    // Recheck immediately before replacement. Renaming over a link replaces the
+    // link itself, but refusing it also catches a surprising concurrent change.
+    const existing = lstatIfPresent(file);
+    if (existing?.isSymbolicLink() || (existing && !existing.isFile())) {
+      throw new Error(`managed-secret key destination changed unexpectedly: ${file}`);
+    }
+    if (existing && !allowReplace) {
+      const current = readManagedSecretKeyFile(file);
+      if (!current.equals(key)) {
+        throw new Error(`managed-secret key destination changed to a different value: ${file}`);
+      }
+      fs.rmSync(temporary, { force: true });
+      return "same";
+    }
+    if (process.platform === "win32" && existing) fs.rmSync(file, { force: true });
+    fs.renameSync(temporary, file);
+    if (process.platform !== "win32") fs.chmodSync(file, 0o600);
+    syncDirectory(parent);
+    return disposition;
+  } finally {
+    if (descriptor !== null) fs.closeSync(descriptor);
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+function managedSecretFailure(error) {
+  die(`managed-secret key safety check failed: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 async function stoppedGuard(what) {
@@ -562,20 +782,50 @@ async function cmdExport(args) {
   if (!target) die("usage: keel export <file.db>");
   await stoppedGuard("a consistent export");
   if (!fs.existsSync(DB_FILE)) die(`no database at ${DB_FILE} yet`);
-  // With the server stopped and WAL checkpointed on clean shutdown, the main
-  // file is the whole notebook - editor attachments included, they live
-  // inside it. OneNote mirror images are the one exception: they live on disk
-  // under uploads/ and travel as a sibling directory.
-  fs.copyFileSync(DB_FILE, target);
-  for (const suffix of ["-wal", "-shm"]) {
-    if (fs.existsSync(DB_FILE + suffix)) fs.copyFileSync(DB_FILE + suffix, target + suffix);
+  const keyTarget = portableManagedSecretKeyPath(target);
+  let managedKey = null;
+  try {
+    managedKey = effectiveManagedSecretKey();
+    if (managedKey) inspectManagedSecretDestination(keyTarget, managedKey.key, false);
+    else rejectOrphanManagedSecretDestination(keyTarget);
+  } catch (error) {
+    managedSecretFailure(error);
   }
+  // With the server stopped and WAL checkpointed on clean shutdown, the main
+  // file carries the notebook and editor attachments. OneNote images and the
+  // managed-secret master key are explicit sibling companions when present.
+  fs.copyFileSync(DB_FILE, target);
+  if (process.platform !== "win32") fs.chmodSync(target, 0o600);
+  for (const suffix of ["-wal", "-shm"]) {
+    if (fs.existsSync(DB_FILE + suffix)) {
+      fs.copyFileSync(DB_FILE + suffix, target + suffix);
+      if (process.platform !== "win32") fs.chmodSync(target + suffix, 0o600);
+    }
+  }
+  if (managedKey) {
+    try {
+      writeManagedSecretKey(keyTarget, managedKey.key, false);
+    } catch (error) {
+      managedSecretFailure(error);
+    }
+  }
+  say(`✔ exported database to ${target}`);
+  say(
+    managedKey
+      ? `  managed-credential key copied to ${keyTarget} (mode 0600)`
+      : "  no managed-credential key is configured; no key companion was written"
+  );
   if (fs.existsSync(UPLOADS_DIR) && fs.readdirSync(UPLOADS_DIR).length > 0) {
     // A user who moved uploads to a bigger disk with a symlink
     // (`ln -s /bigdisk ~/.keel/uploads`) must still get the BYTES in the
     // export - a copied link dangles the moment the bundle leaves this
     // machine, silently losing every image the success line claims to carry.
-    const copy = copyTreeDereferenced(UPLOADS_DIR, `${target}.uploads`);
+    const copy = copyTreeDereferenced(
+      UPLOADS_DIR,
+      `${target}.uploads`,
+      undefined,
+      { directory: 0o700, file: 0o600 }
+    );
     // Some images beat no images - but a copy where nothing at all could be
     // read is not a copy, and the user must not carry that bundle away
     // believing it holds the mirror.
@@ -586,10 +836,8 @@ async function cmdExport(args) {
           `  the export carries no OneNote mirror images - fix the permissions and export again`
       );
     }
-    say(`✔ exported to ${target} (+ ${path.basename(target)}.uploads - OneNote mirror images)`);
+    say(`  OneNote mirror images copied to ${target}.uploads`);
     reportSkipped(copy, `${path.basename(target)}.uploads`);
-  } else {
-    say(`✔ exported to ${target} - this one file (plus any -wal sidecar) is everything`);
   }
 }
 
@@ -598,6 +846,31 @@ async function cmdImport(args) {
   if (!source || !fs.existsSync(source)) die("usage: keel import <file.db>");
   await stoppedGuard("a safe import");
   ensureHome();
+  let incomingKey = null;
+  let currentKey = null;
+  try {
+    incomingKey = incomingManagedSecretKey(source);
+    currentKey = effectiveManagedSecretKey();
+    if (
+      incomingKey &&
+      currentKey?.source === "environment" &&
+      !currentKey.key.equals(incomingKey.key)
+    ) {
+      throw new Error(
+        "the imported key does not match KEEL_SERVER_SECRET_KEY; update or remove that environment override before importing this database"
+      );
+    }
+    if (incomingKey && currentKey?.source !== "environment") {
+      if (!fs.existsSync(DB_FILE) && currentKey && !currentKey.key.equals(incomingKey.key)) {
+        throw new Error(
+          `refusing to replace a different local managed-secret key at ${MANAGED_SECRET_KEY_PATH} without a current database to back it up; move or remove that key explicitly`
+        );
+      }
+      inspectManagedSecretDestination(MANAGED_SECRET_KEY_PATH, incomingKey.key, true);
+    }
+  } catch (error) {
+    managedSecretFailure(error);
+  }
   let backup = null;
   if (fs.existsSync(DB_FILE)) {
     backup = `${DB_FILE}.pre-import-${Date.now()}`;
@@ -608,12 +881,29 @@ async function cmdImport(args) {
     for (const suffix of ["-wal", "-shm"]) {
       if (fs.existsSync(DB_FILE + suffix)) fs.copyFileSync(DB_FILE + suffix, backup + suffix);
     }
+    if (currentKey) {
+      try {
+        writeManagedSecretKey(portableManagedSecretKeyPath(backup), currentKey.key, false);
+      } catch (error) {
+        managedSecretFailure(error);
+      }
+    }
     say(`current database kept at ${backup}`);
+    if (currentKey) {
+      say(`current managed-credential key kept at ${portableManagedSecretKeyPath(backup)}`);
+    }
   }
   for (const suffix of ["-wal", "-shm"]) fs.rmSync(DB_FILE + suffix, { force: true });
   fs.copyFileSync(source, DB_FILE);
   for (const suffix of ["-wal", "-shm"]) {
     if (fs.existsSync(source + suffix)) fs.copyFileSync(source + suffix, DB_FILE + suffix);
+  }
+  if (incomingKey && currentKey?.source !== "environment") {
+    try {
+      writeManagedSecretKey(MANAGED_SECRET_KEY_PATH, incomingKey.key, true);
+    } catch (error) {
+      managedSecretFailure(error);
+    }
   }
   // Exports carry OneNote mirror images as <file>.uploads (see cmdExport).
   // Replace, don't merge - the images must match the database being restored -
@@ -640,20 +930,52 @@ async function cmdImport(args) {
     }
     reportSkipped(copy, `${uploadsReal}`);
   }
+  if (incomingKey) {
+    say(
+      currentKey?.source === "environment"
+        ? "managed-credential key companion matches the environment override"
+        : `managed-credential key installed at ${MANAGED_SECRET_KEY_PATH} (mode 0600)`
+    );
+  } else {
+    say(
+      currentKey
+        ? "no managed-secret companion was supplied; the current local key was kept"
+        : "no managed-secret companion was supplied; reconnect managed credentials and cloud integrations if this database used them"
+    );
+  }
   say(`✔ imported - keel start and sign in as before`);
 }
 
 async function cmdToDocker(args) {
   const dir = path.resolve(args[0] || "keel-docker");
-  fs.mkdirSync(path.join(dir, "data"), { recursive: true });
+  const dataDirectory = path.join(dir, "data");
+  const dockerKeyPath = path.join(dataDirectory, MANAGED_SECRET_KEY_FILE);
+  fs.mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") fs.chmodSync(dataDirectory, 0o700);
   await stoppedGuard("copying the database into the Docker volume");
+  let managedKey = null;
+  try {
+    managedKey = effectiveManagedSecretKey();
+    if (managedKey) inspectManagedSecretDestination(dockerKeyPath, managedKey.key, false);
+    else rejectOrphanManagedSecretDestination(dockerKeyPath);
+  } catch (error) {
+    managedSecretFailure(error);
+  }
   if (fs.existsSync(DB_FILE)) {
-    fs.copyFileSync(DB_FILE, path.join(dir, "data", "keel.db"));
+    fs.copyFileSync(DB_FILE, path.join(dataDirectory, "keel.db"));
     for (const suffix of ["-wal", "-shm"]) {
       if (fs.existsSync(DB_FILE + suffix))
-        fs.copyFileSync(DB_FILE + suffix, path.join(dir, "data", "keel.db" + suffix));
+        fs.copyFileSync(DB_FILE + suffix, path.join(dataDirectory, "keel.db" + suffix));
     }
-    say(`✔ database copied into ${path.join(dir, "data")}`);
+    say(`✔ database copied into ${dataDirectory}`);
+  }
+  if (managedKey) {
+    try {
+      writeManagedSecretKey(dockerKeyPath, managedKey.key, false);
+    } catch (error) {
+      managedSecretFailure(error);
+    }
+    say(`✔ managed-credential key copied into ${dataDirectory} (mode 0600)`);
   }
   // OneNote mirror images live outside the database; they ride the same
   // mounted volume so `docker compose build` never destroys them. Copied as
@@ -669,17 +991,54 @@ async function cmdToDocker(args) {
     }
     reportSkipped(copy, path.join(dir, "data", "uploads"));
   }
-  if (fs.existsSync(ENV_FILE)) fs.copyFileSync(ENV_FILE, path.join(dir, ".env.keel"));
+  if (fs.existsSync(ENV_FILE)) {
+    const dockerEnv = path.join(dir, ".env.keel");
+    fs.copyFileSync(ENV_FILE, dockerEnv);
+    if (process.platform !== "win32") fs.chmodSync(dockerEnv, 0o600);
+  }
   fs.writeFileSync(
     path.join(dir, "docker-compose.yml"),
     `# Keel in Docker - generated by \`keel to-docker\`.
 # Start it:   docker compose up -d
 # Update it:  docker compose build --pull && docker compose up -d
 services:
+  # Import the private host-side seed once into a Docker-owned volume. This
+  # avoids host UID differences making a mode-0600 key unreadable to Keel's
+  # unprivileged node user. A non-empty unmarked volume is refused, never
+  # merged, so an interrupted or unexpected import cannot overwrite live data.
+  bootstrap:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    volumes:
+      - ./data:/staged:ro
+      - keel-data:/data
+    command:
+      - /bin/sh
+      - -euc
+      - |
+        if [ -e /data/.keel-import-complete ]; then exit 0; fi
+        if find /data -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+          echo "Refusing to import into a non-empty unmarked Keel volume." >&2
+          echo "Inspect the keel-data volume; remove it only if this first import can be discarded." >&2
+          exit 1
+        fi
+        cp -a /staged/. /data/
+        chown -R 1000:1000 /data
+        chmod -R go-rwx /data
+        touch /data/.keel-import-complete
+        chown 1000:1000 /data/.keel-import-complete
+        chmod 0600 /data/.keel-import-complete
   keel:
     build: https://github.com/${REPO}.git#main
     restart: unless-stopped
-    env_file: .env.keel
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env.keel
+        required: true
+        format: raw
     environment:
       DATABASE_URL: file:/data/keel.db
       NOPIN_UPLOAD_DIR: /data/uploads
@@ -687,20 +1046,46 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
-      - ./data:/data
+      - keel-data:/data
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 45s
+volumes:
+  keel-data:
 `
   );
+  const dockerIgnoreFile = path.join(dir, ".gitignore");
+  let dockerIgnore = "";
+  try {
+    const ignoreStat = fs.lstatSync(dockerIgnoreFile);
+    if (ignoreStat.isSymbolicLink() || !ignoreStat.isFile()) {
+      die(`refusing to write a non-regular .gitignore at ${dockerIgnoreFile}`);
+    }
+    dockerIgnore = fs.readFileSync(dockerIgnoreFile, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const ignoredPaths = new Set(dockerIgnore.split(/\r?\n/).map((line) => line.trim()));
+  const missingIgnores = [".env.keel", "data/"].filter((entry) => !ignoredPaths.has(entry));
+  if (missingIgnores.length > 0) {
+    const separator = dockerIgnore && !dockerIgnore.endsWith("\n") ? "\n" : "";
+    fs.appendFileSync(dockerIgnoreFile, `${separator}${missingIgnores.join("\n")}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    if (process.platform !== "win32") fs.chmodSync(dockerIgnoreFile, 0o600);
+  }
   say(`✔ wrote ${dir}/docker-compose.yml`);
   say(``);
   say(`Next steps:`);
   say(`  cd ${dir} && docker compose up -d`);
-  say(`  # your notes, users and settings come along - it's the same database file.`);
+  say(`  # your notes, users and settings come along with the database and its managed-secret key.`);
+  say(`  # ./data is a private one-time seed; the running app uses the Docker volume named keel-data.`);
+  say(`  # .gitignore excludes the seed and .env.keel from source control.`);
+  say(`  # Re-running this command does not replace an initialized volume.`);
   say(`  # For a REMOTE machine: copy the '${path.basename(dir)}' directory there first (scp -r),`);
   say(`  # then run the same command on that machine.`);
 }
@@ -863,10 +1248,37 @@ async function cmdUpdate(args) {
   }
 }
 
+async function cmdClaim(args) {
+  if (args.length !== 1 || args[0] === "--help" || args[0] === "-h") {
+    say(`usage: keel claim keel_claim_TOKEN
+
+Generate a five-minute claim token while signed in to Keel. This command shows
+the exact account and database bound to that token, then asks the operating
+system to confirm control of this machine. Claiming does not close registration
+or restart the server.`);
+    if (args.length !== 1) process.exitCode = 1;
+    return;
+  }
+  const helper = path.join(APP_DIR, "scripts", "claim-instance.mjs");
+  if (!fs.existsSync(helper)) die(`claim helper is missing from this Keel build: ${helper}`);
+  const { runClaimCommand } = await import(pathToFileURL(helper).href);
+  try {
+    await runClaimCommand({
+      token: args[0],
+      appRoot: APP_DIR,
+      envFile: ENV_FILE,
+      defaultDatabase: DB_FILE,
+    });
+  } catch (error) {
+    die(`claim failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function cmdPaths() {
   say(`app:      ${APP_DIR}`);
   say(`data:     ${HOME}`);
   say(`database: ${DB_FILE}`);
+  say(`credential key: ${MANAGED_SECRET_KEY_PATH} (created for encrypted Settings and cloud credentials)`);
   say(`config:   ${ENV_FILE}`);
   say(`logs:     ${LOG_FILE}`);
   say(`uploads:  ${UPLOADS_DIR} (OneNote mirror images)`);
@@ -878,10 +1290,11 @@ function cmdHelp() {
 
   keel start [--port N] [--foreground]   run the server (data in ~/.keel)
   keel stop | status | logs [n]          manage it
-  keel export <file.db>                  the whole notebook as one file
-  keel import <file.db>                  restore it anywhere
+  keel export <file.db>                  database plus managed-secret companion
+  keel import <file.db>                  restore that portable bundle
   keel to-docker [dir]                   turn this install into a Docker deployment
   keel update [--check]                  update in place; data is never touched
+  keel claim <token>                     claim instance administration (OS-confirmed)
   keel paths                             where everything lives
 
 Everything else - backups to Drive/OneDrive/Azure/R2, access control, the
@@ -898,6 +1311,7 @@ const commands = {
   import: cmdImport,
   "to-docker": cmdToDocker,
   update: cmdUpdate,
+  claim: cmdClaim,
   paths: cmdPaths,
   help: cmdHelp,
   "--help": cmdHelp,

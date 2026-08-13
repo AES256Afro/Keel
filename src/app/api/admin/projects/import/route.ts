@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { audit } from "@/lib/audit";
+import { requireJsonRequest, requireSameOriginMutation } from "@/lib/same-origin";
 import { requireInstanceOwner, handleApiError, ApiError } from "@/lib/api";
 import { serializeTags } from "@/lib/site";
 
@@ -22,6 +23,8 @@ interface GhRepo {
 export async function POST(req: NextRequest) {
   try {
     const ctx = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Import public projects from Keel Admin");
+    requireJsonRequest(req, "Project-import requests must use application/json");
     const b = await req.json().catch(() => ({}));
     const username = String(b.username ?? "").trim();
     const bodyToken = b.token ? String(b.token).trim() : "";

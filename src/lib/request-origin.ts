@@ -48,6 +48,26 @@ export function publicOrigin(req: NextRequest): string {
   return `${proto}://${host}`;
 }
 
+/**
+ * The origin that delivered this specific browser request.
+ *
+ * This deliberately ignores KEEL_PUBLIC_URL. That value is the canonical
+ * external origin for OAuth/WebAuthn, but an operator may securely bootstrap
+ * the same server through an SSH-forwarded http://localhost URL while the
+ * public reverse proxy is stopped. CSRF checks must compare Origin with the
+ * request-facing host/protocol or that safe bootstrap becomes unusable.
+ */
+export function requestFacingOrigin(req: NextRequest): string {
+  const host =
+    req.headers.get("x-forwarded-host")?.split(",")[0].trim() ||
+    req.headers.get("host") ||
+    req.nextUrl.host;
+  const proto =
+    req.headers.get("x-forwarded-proto")?.split(",")[0].trim() ||
+    req.nextUrl.protocol.replace(":", "");
+  return `${proto}://${host}`;
+}
+
 /** The same resolution for server components, which have Headers, not a request. */
 export function publicOriginFromHeaders(h: Headers): string {
   const configured = keelEnv("PUBLIC_URL")?.trim().replace(/\/+$/, "");

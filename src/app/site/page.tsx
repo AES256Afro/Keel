@@ -1,20 +1,22 @@
 import Link from "next/link";
-import { keelEnv } from "@/lib/env";
 import { listPublicProjects, listPublicNews, projectTags } from "@/lib/site";
+import { getSiteSettingsStatus } from "@/lib/instance-settings";
 
 export const dynamic = "force-dynamic";
 
 export default async function SiteHome() {
-  const [projects, news] = await Promise.all([listPublicProjects(), listPublicNews()]);
-  const siteName = keelEnv("SITE_NAME") ?? "My projects";
-  const siteTagline = keelEnv("SITE_TAGLINE") ?? "Projects, notes, and experiments.";
+  const [projects, news, site] = await Promise.all([
+    listPublicProjects(),
+    listPublicNews(),
+    getSiteSettingsStatus(),
+  ]);
 
   return (
     <div className="space-y-14">
       <section>
-        <h1 className="text-3xl font-bold tracking-tight">{siteName}</h1>
+        <h1 className="text-3xl font-bold tracking-tight">{site.name.value}</h1>
         <p className="mt-2 text-[var(--muted)] max-w-2xl">
-          {siteTagline}
+          {site.tagline.value}
         </p>
       </section>
 

@@ -5,10 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { requireOwner, handleApiError, ApiError } from "@/lib/api";
 import {
+  CloudBackupTooLargeError,
   cloudConnected,
   downloadCloudBackupToFile,
   listCloudBackups,
 } from "@/lib/cloud";
+import { maxBackupUploadBytes } from "@/lib/limits";
 import { RestoreRefused, readBackupStream, restoreSnapshot } from "@/lib/backup";
 import { isEncryptedBackupName } from "@/lib/backup-format";
 import { audit } from "@/lib/audit";
@@ -30,18 +32,28 @@ export async function POST(req: NextRequest) {
     // a crafted id from reading an unrelated R2 or Azure object in the bucket.
     const selected = (await listCloudBackups(workspace)).find((file) => file.id === fileId);
     if (!selected) throw new ApiError(404, "That cloud backup is no longer available");
+    const maxBytes = maxBackupUploadBytes();
+    if (selected.size > maxBytes) {
+      throw new ApiError(413, "Backup file too large");
+    }
 
     spool = await fs.mkdtemp(path.join(os.tmpdir(), "keel-cloud-restore-"));
     const localFile = path.join(spool, "backup.bin");
     let read;
     try {
-      await downloadCloudBackupToFile(workspace, fileId, localFile);
+      await downloadCloudBackupToFile(workspace, fileId, localFile, {
+        declaredSize: selected.size,
+        maxBytes,
+      });
       read = await readBackupStream(
         createReadStream(localFile),
         passphrase,
         isEncryptedBackupName(selected.name)
       );
     } catch (err) {
+      if (err instanceof CloudBackupTooLargeError) {
+        throw new ApiError(413, err.message);
+      }
       throw new ApiError(400, err instanceof Error ? err.message : "Could not read cloud backup");
     }
 

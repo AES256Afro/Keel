@@ -49,8 +49,8 @@ export function prepareDatabase(root, url) {
     : path.join(root, "prisma", "schema.prisma");
 
   if (isPostgres(url)) {
-    // The suites assume an empty database; a leftover row from a previous job
-    // would make "the instance owner is whoever registered first" nondeterministic.
+    // The suites assume an empty database; leftover users, workspaces or an
+    // explicit instance claim would make authorization results nondeterministic.
     run("npx", ["prisma", "db", "push", "--force-reset", "--skip-generate", "--schema", schema], { DATABASE_URL: url }, root);
     return;
   }

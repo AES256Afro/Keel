@@ -3,8 +3,10 @@
 //
 //   node scripts/links-check.mjs
 import { spawn } from "child_process";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
+import fs from "fs/promises";
 import { register } from "node:module";
+import os from "os";
 import path from "path";
 import { pathToFileURL, fileURLToPath } from "url";
 import { cleanDatabase, prepareDatabase, testDatabaseUrl, testPrisma } from "./test-db.mjs";
@@ -19,7 +21,17 @@ register("./ts-loader.mjs", import.meta.url);
 const { extractLinks, normalizeTitle } = await import(
   pathToFileURL(path.join(root, "src/lib/links.ts")).href
 );
-const { htmlToTipTap } = await import(
+const {
+  createOneNoteImageBudget,
+  GraphImageTooLargeError,
+  graphFetch,
+  graphList,
+  htmlToTipTap,
+  localizeImages,
+  OneNotePageTooLargeError,
+  readGraphImageBody,
+  readOneNotePageHtml,
+} = await import(
   pathToFileURL(path.join(root, "src/lib/onenote.ts")).href
 );
 
@@ -104,6 +116,374 @@ console.log("\nTitle normalisation");
 {
   check("case is ignored", normalizeTitle("My Page") === normalizeTitle("my page"));
   check("whitespace is collapsed", normalizeTitle("  a   b  ") === "a b");
+}
+
+console.log("\nOneNote Graph transport security");
+{
+  let declaredCancelled = false;
+  const declaredBody = new ReadableStream({
+    cancel() {
+      declaredCancelled = true;
+    },
+  });
+  let declaredError;
+  try {
+    await readGraphImageBody(
+      new Response(declaredBody, { headers: { "Content-Length": "9" } }),
+      8
+    );
+  } catch (error) {
+    declaredError = error;
+  }
+  check(
+    "a declared oversized Graph image is rejected before buffering",
+    declaredError instanceof GraphImageTooLargeError && declaredCancelled,
+    String(declaredError ?? "response unexpectedly accepted")
+  );
+
+  let chunkedCancelled = false;
+  let chunk = 0;
+  const chunkedBody = new ReadableStream({
+    pull(controller) {
+      if (chunk++ < 2) controller.enqueue(new Uint8Array(5));
+      else controller.close();
+    },
+    cancel() {
+      chunkedCancelled = true;
+    },
+  });
+  let chunkedError;
+  try {
+    await readGraphImageBody(new Response(chunkedBody), 8);
+  } catch (error) {
+    chunkedError = error;
+  }
+  check(
+    "a chunked Graph image is cancelled as soon as its stream crosses the cap",
+    chunkedError instanceof GraphImageTooLargeError && chunkedCancelled,
+    String(chunkedError ?? "response unexpectedly accepted")
+  );
+
+  let declaredHtmlCancelled = false;
+  let declaredHtmlReads = 0;
+  const declaredHtmlBody = new ReadableStream(
+    {
+      pull() {
+        declaredHtmlReads++;
+      },
+      cancel() {
+        declaredHtmlCancelled = true;
+      },
+    },
+    { highWaterMark: 0 }
+  );
+  let declaredHtmlError;
+  try {
+    await readOneNotePageHtml(
+      new Response(declaredHtmlBody, { headers: { "Content-Length": "9" } }),
+      8
+    );
+  } catch (error) {
+    declaredHtmlError = error;
+  }
+  check(
+    "declared oversized OneNote HTML is cancelled before its body is read",
+    declaredHtmlError instanceof OneNotePageTooLargeError &&
+      declaredHtmlCancelled &&
+      declaredHtmlReads === 0,
+    `${String(declaredHtmlError ?? "response unexpectedly accepted")}; reads=${declaredHtmlReads}`
+  );
+
+  const exerciseHtmlStreamCap = async (name, headers) => {
+    let cancelled = false;
+    let chunk = 0;
+    const body = new ReadableStream({
+      pull(controller) {
+        if (chunk++ < 2) controller.enqueue(new Uint8Array(5));
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    let error;
+    try {
+      await readOneNotePageHtml(new Response(body, { headers }), 8);
+    } catch (caught) {
+      error = caught;
+    }
+    check(
+      `${name} OneNote HTML is cancelled when actual bytes cross the cap`,
+      error instanceof OneNotePageTooLargeError && cancelled,
+      `${String(error ?? "response unexpectedly accepted")}; cancelled=${cancelled}`
+    );
+  };
+  await exerciseHtmlStreamCap("chunked", {});
+  await exerciseHtmlStreamCap("false-length", { "Content-Length": "0" });
+
+  const amplifyingHtml = `<p>${'"\\'.repeat(20)}</p>`;
+  const amplifiedContent = htmlToTipTap(amplifyingHtml, 10_000);
+  const amplificationLimit = Math.floor(
+    (amplifyingHtml.length + amplifiedContent.length) / 2
+  );
+  let amplificationError;
+  try {
+    htmlToTipTap(amplifyingHtml, amplificationLimit);
+  } catch (error) {
+    amplificationError = error;
+  }
+  check(
+    "HTML-to-TipTap amplification is refused at the converted-content limit",
+    amplifyingHtml.length < amplificationLimit &&
+      amplifiedContent.length > amplificationLimit &&
+      amplificationError instanceof OneNotePageTooLargeError,
+    `${amplifyingHtml.length} HTML characters; ${amplifiedContent.length} converted; limit ${amplificationLimit}`
+  );
+
+  const normalHtml = "<html><body><p>normal OneNote page</p></body></html>";
+  const readNormalHtml = await readOneNotePageHtml(
+    new Response(Buffer.from(normalHtml), {
+      headers: { "Content-Length": String(Buffer.byteLength(normalHtml)) },
+    }),
+    1_024
+  );
+  const normalContent = htmlToTipTap(readNormalHtml, 1_024);
+  check(
+    "normal bounded OneNote HTML reads and converts for import",
+    normalContent.includes("normal OneNote page") && JSON.parse(normalContent).type === "doc",
+    normalContent
+  );
+
+  const originalFetch = globalThis.fetch;
+  let timeoutSignal;
+  let timeoutRedirect;
+  try {
+    globalThis.fetch = async (_input, init) => {
+      timeoutSignal = init?.signal;
+      timeoutRedirect = init?.redirect;
+      return await new Promise((_resolve, reject) => {
+        // AbortSignal.timeout() intentionally uses an unreferenced timer in
+        // Node. Keep this standalone regression alive until that signal fires.
+        const keepAlive = setTimeout(() => reject(new Error("mock did not abort")), 1_000);
+        const abort = () => {
+          clearTimeout(keepAlive);
+          reject(init?.signal?.reason ?? new Error("aborted"));
+        };
+        if (init?.signal?.aborted) abort();
+        else init?.signal?.addEventListener("abort", abort, { once: true });
+      });
+    };
+    let timeoutError;
+    try {
+      await graphFetch("test-access-token", "https://graph.microsoft.com/v1.0/me", {
+        timeoutMs: 10,
+        attempts: 1,
+      });
+    } catch (error) {
+      timeoutError = error;
+    }
+    check(
+      "every bearer fetch has a finite abort signal and rejects redirects",
+      timeoutSignal instanceof AbortSignal &&
+        timeoutSignal.aborted &&
+        timeoutRedirect === "error" &&
+        /timed out/.test(String(timeoutError)),
+      String(timeoutError ?? "request unexpectedly completed")
+    );
+
+    const requests = [];
+    globalThis.fetch = async (input, init) => {
+      requests.push({ input: String(input), authorization: init?.headers?.Authorization });
+      return Response.json({
+        value: [{ id: "safe-page" }],
+        "@odata.nextLink": "https://attacker.example/steal-token",
+      });
+    };
+    let paginationError;
+    try {
+      await graphList("pagination-secret", "https://graph.microsoft.com/v1.0/me/onenote/pages");
+    } catch (error) {
+      paginationError = error;
+    }
+    check(
+      "a malicious Graph nextLink is rejected before the bearer token can leave Graph",
+      requests.length === 1 &&
+        requests[0]?.input.startsWith("https://graph.microsoft.com/") &&
+        requests[0]?.authorization === "Bearer pagination-secret" &&
+        /must use https:\/\/graph\.microsoft\.com/.test(String(paginationError)),
+      `${String(paginationError ?? "pagination unexpectedly continued")}; requests=${JSON.stringify(requests)}`
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+console.log("\nOneNote cumulative image budgets");
+{
+  const imageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "keel-onenote-images-"));
+  const previousUploadDir = process.env.NOPIN_UPLOAD_DIR;
+  const originalFetch = globalThis.fetch;
+  process.env.NOPIN_UPLOAD_DIR = imageRoot;
+  const graphImage = (name) => `https://graph.microsoft.com/v1.0/me/onenote/resources/${name}`;
+  const bodies = new Map();
+  const localizedCount = (html) =>
+    html.match(/\/api\/assets\/onenote-[a-f0-9]{64}\.(?:jpg|png|gif|webp)/g)?.length ?? 0;
+  try {
+    globalThis.fetch = async (input) => {
+      const bytes = bodies.get(String(input));
+      if (!bytes) return new Response("missing fixture", { status: 404 });
+      return new Response(bytes, { headers: { "Content-Type": "image/png" } });
+    };
+
+    const byteWorkspace = "byte-budget";
+    for (const [name, fill] of [["byte-a", 0x11], ["byte-b", 0x22], ["byte-c", 0x33]]) {
+      bodies.set(graphImage(name), Buffer.alloc(4, fill));
+    }
+    const byteBudget = await createOneNoteImageBudget(byteWorkspace, {
+      maxNewBytes: 8,
+      maxNewFiles: 10,
+      maxPersistedBytes: 100,
+    });
+    const byteFirst = await localizeImages(
+      "image-budget-token",
+      byteWorkspace,
+      `<img src="${graphImage("byte-a")}"><img src="${graphImage("byte-b")}">`,
+      byteBudget
+    );
+    const byteSecond = await localizeImages(
+      "image-budget-token",
+      byteWorkspace,
+      `<img src="${graphImage("byte-c")}">`,
+      byteBudget
+    );
+    check(
+      "individually valid images share one byte budget across page localization calls",
+      byteFirst.downloaded === 2 &&
+        byteSecond.downloaded === 0 &&
+        byteBudget.newBytes === 8 &&
+        byteBudget.newFiles === 2 &&
+        localizedCount(byteFirst.html) === 2 &&
+        localizedCount(byteSecond.html) === 0,
+      JSON.stringify({
+        first: byteFirst.downloaded,
+        second: byteSecond.downloaded,
+        bytes: byteBudget.newBytes,
+        files: byteBudget.newFiles,
+      })
+    );
+    check(
+      "crossing the cumulative byte budget creates no third file",
+      (await fs.readdir(path.join(imageRoot, byteWorkspace))).length === 2
+    );
+
+    const countWorkspace = "count-budget";
+    const countA = Buffer.alloc(4, 0x41);
+    bodies.set(graphImage("count-a"), countA);
+    bodies.set(graphImage("count-b"), Buffer.alloc(4, 0x42));
+    bodies.set(graphImage("count-c"), Buffer.alloc(4, 0x43));
+    bodies.set(graphImage("count-a-copy"), countA);
+    const countBudget = await createOneNoteImageBudget(countWorkspace, {
+      maxNewBytes: 100,
+      maxNewFiles: 2,
+      maxPersistedBytes: 100,
+    });
+    const countFirst = await localizeImages(
+      "image-budget-token",
+      countWorkspace,
+      `<img src="${graphImage("count-a")}">`,
+      countBudget
+    );
+    const countSecond = await localizeImages(
+      "image-budget-token",
+      countWorkspace,
+      `<img src="${graphImage("count-b")}"><img src="${graphImage("count-c")}"><img src="${graphImage("count-a-copy")}">`,
+      countBudget
+    );
+    check(
+      "the per-sync unique image count cap prevents a third new write",
+      countFirst.downloaded === 1 &&
+        countSecond.downloaded === 1 &&
+        countBudget.newFiles === 2 &&
+        (await fs.readdir(path.join(imageRoot, countWorkspace))).length === 2,
+      JSON.stringify({
+        first: countFirst.downloaded,
+        second: countSecond.downloaded,
+        files: countBudget.newFiles,
+      })
+    );
+    check(
+      "an existing hash-deduplicated image remains localizable after the count cap stops writes",
+      localizedCount(countSecond.html) === 2 && countSecond.html.includes(graphImage("count-c")),
+      countSecond.html
+    );
+
+    const persistedWorkspace = "persisted-budget";
+    const persistedDir = path.join(imageRoot, persistedWorkspace);
+    const persistedBytes = Buffer.alloc(6, 0x51);
+    const persistedName = `onenote-${createHash("sha256").update(persistedBytes).digest("hex")}.png`;
+    await fs.mkdir(persistedDir, { recursive: true });
+    await fs.writeFile(path.join(persistedDir, persistedName), persistedBytes);
+    bodies.set(graphImage("persisted-new"), Buffer.alloc(4, 0x52));
+    bodies.set(graphImage("persisted-copy"), persistedBytes);
+    const persistedBudget = await createOneNoteImageBudget(persistedWorkspace, {
+      maxNewBytes: 100,
+      maxNewFiles: 10,
+      maxPersistedBytes: 8,
+    });
+    const persisted = await localizeImages(
+      "image-budget-token",
+      persistedWorkspace,
+      `<img src="${graphImage("persisted-new")}"><img src="${graphImage("persisted-copy")}">`,
+      persistedBudget
+    );
+    check(
+      "the persisted workspace budget blocks growth across repeated syncs without charging dedupe",
+      persisted.downloaded === 0 &&
+        persistedBudget.newFiles === 0 &&
+        (await fs.readdir(persistedDir)).length === 1 &&
+        localizedCount(persisted.html) === 1 &&
+        persisted.html.includes(graphImage("persisted-new")),
+      persisted.html
+    );
+
+    const inodeWorkspace = "persisted-count-budget";
+    const inodeDir = path.join(imageRoot, inodeWorkspace);
+    await fs.mkdir(inodeDir, { recursive: true });
+    const inodeBodies = [Buffer.from([0x61]), Buffer.from([0x62]), Buffer.from([0x63])];
+    for (const [index, bytes] of inodeBodies.slice(0, 2).entries()) {
+      const name = `onenote-${createHash("sha256").update(bytes).digest("hex")}.png`;
+      await fs.writeFile(path.join(inodeDir, name), bytes);
+      bodies.set(graphImage(`inode-copy-${index}`), bytes);
+    }
+    bodies.set(graphImage("inode-new"), inodeBodies[2]);
+    const inodeBudget = await createOneNoteImageBudget(inodeWorkspace, {
+      maxNewBytes: 100,
+      maxNewFiles: 10,
+      maxPersistedBytes: 100,
+      maxPersistedFiles: 2,
+    });
+    const inodeResult = await localizeImages(
+      "image-budget-token",
+      inodeWorkspace,
+      `<img src="${graphImage("inode-new")}"><img src="${graphImage("inode-copy-0")}">`,
+      inodeBudget
+    );
+    check(
+      "the persisted file-count budget blocks tiny unique images across repeated syncs",
+      inodeResult.downloaded === 0 &&
+        inodeBudget.newFiles === 0 &&
+        inodeBudget.knownFiles.size === 2 &&
+        (await fs.readdir(inodeDir)).length === 2 &&
+        localizedCount(inodeResult.html) === 1 &&
+        inodeResult.html.includes(graphImage("inode-new")),
+      inodeResult.html
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousUploadDir === undefined) delete process.env.NOPIN_UPLOAD_DIR;
+    else process.env.NOPIN_UPLOAD_DIR = previousUploadDir;
+    await fs.rm(imageRoot, { recursive: true, force: true });
+  }
 }
 
 console.log("\nOneNote HTML conversion");
@@ -353,7 +733,12 @@ const server = spawn("npx", ["next", "start", "-p", String(PORT)], {
   shell: process.platform === "win32",
 });
 
-const auth = { Cookie: `keel_session=${token}`, "Content-Type": "application/json" };
+const auth = {
+  Cookie: `keel_session=${token}`,
+  "Content-Type": "application/json",
+  Origin: BASE,
+  "Sec-Fetch-Site": "same-origin",
+};
 const post = (u, b) => fetch(BASE + u, { method: "POST", headers: auth, body: JSON.stringify(b) }).then((r) => r.json());
 const patch = (u, b) => fetch(BASE + u, { method: "PATCH", headers: auth, body: JSON.stringify(b) });
 const get = (u) => fetch(BASE + u, { headers: auth }).then((r) => r.json());

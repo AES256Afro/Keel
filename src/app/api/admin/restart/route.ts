@@ -1,7 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requireInstanceOwner, enforceLimit, handleApiError } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { isSupervised, scheduleRestartExit } from "@/lib/server-info";
+import { requireSameOriginMutation } from "@/lib/same-origin";
 
 /**
  * Restart the server from the app.
@@ -15,9 +16,10 @@ import { isSupervised, scheduleRestartExit } from "@/lib/server-info";
  * Instance-owner only: this stops the server for every user of the instance,
  * so workspace-level roles can never reach it.
  */
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
     const { user } = await requireInstanceOwner();
+    requireSameOriginMutation(req, "Restart this server from Keel Settings");
     await enforceLimit("server-restart", { limit: 3, windowMs: 60_000, userId: user.id });
 
     const supervised = isSupervised();

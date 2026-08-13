@@ -84,7 +84,20 @@ export async function register(
     if (err instanceof ServerBusyError) return { error: err.message };
     throw err;
   }
-  const user = await provisionUser({ name, email, passwordHash });
+  let user;
+  try {
+    // A password proves knowledge of a secret chosen in this request, not
+    // control of the claimed mailbox. Never consume email-address invites.
+    user = await provisionUser({ name, email, passwordHash, emailVerified: false });
+  } catch (err) {
+    // The lookup above is deliberately only an early, friendly fast path. The
+    // unique email constraint is the real arbiter when two registrations race.
+    // Never return the winning user here: a second password request must not
+    // receive a session for an account created by the first request.
+    const raceWinner = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (raceWinner) return { error: "An account with that email already exists." };
+    throw err;
+  }
   await createSession(user.id);
   redirect("/");
 }

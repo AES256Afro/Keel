@@ -2,11 +2,13 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentContext } from "@/lib/auth";
-import { keelEnv } from "@/lib/env";
 import { backupRoot } from "@/lib/backup";
+import { getBackupPassphraseStatus } from "@/lib/instance-settings";
 import { attachmentQuotaBytes, maxAttachmentBytes } from "@/lib/attachments";
 import { googleConfigured, microsoftConfigured } from "@/lib/oauth";
+import { getInstanceClaimStatus } from "@/lib/instance";
 import WelcomeActions from "@/components/WelcomeActions";
+import InstanceClaimInstructions from "@/components/InstanceClaimInstructions";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +21,12 @@ export const dynamic = "force-dynamic";
 export default async function WelcomePage() {
   const ctx = await getCurrentContext();
   if (!ctx) redirect("/login");
+  const claimStatus = await getInstanceClaimStatus(ctx.user);
+  const [googleReady, microsoftReady, backupPassphrase] = await Promise.all([
+    googleConfigured(),
+    microsoftConfigured(),
+    getBackupPassphraseStatus(),
+  ]);
 
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
@@ -31,13 +39,15 @@ export default async function WelcomePage() {
     {
       key: "backup-local",
       title: "Local snapshots",
-      line: "Works right now, zero setup. Encrypted once you set a passphrase.",
+      line: backupPassphrase.configured
+        ? "Works right now with a server-side encryption passphrase."
+        : "Works right now. Set a server-side passphrase before storing real backups.",
       ready: true,
     },
     {
       key: "backup-gdrive",
       title: "Google Drive",
-      line: googleConfigured()
+      line: googleReady
         ? "One click to connect - the server is already configured for Google."
         : "Needs the free Google credential first (about five minutes).",
       ready: ctx.workspace.cloudProvider === "google",
@@ -45,7 +55,7 @@ export default async function WelcomePage() {
     {
       key: "backup-onedrive",
       title: "OneDrive",
-      line: microsoftConfigured()
+      line: microsoftReady
         ? "One click to connect - the server is already configured for Microsoft."
         : "Needs the free Microsoft registration first (about five minutes).",
       ready: ctx.workspace.cloudProvider === "onedrive",
@@ -68,13 +78,21 @@ export default async function WelcomePage() {
     <div className="mx-auto max-w-2xl px-8 py-12">
       <h1 className="mb-2 text-3xl font-bold">Welcome to Keel 👋</h1>
       <p className="mb-10 text-[var(--muted)]">
-        You&apos;re in - signing in was the only required step. Two minutes here answers the
-        questions worth asking on day one, and all of it lives in{" "}
+        You&apos;re in and can start writing now. Two minutes here answers the questions worth
+        asking on day one, and all of it lives in{" "}
         <Link href="/setup" className="text-[var(--link)] hover:underline">
           ✳ Setup
         </Link>{" "}
         whenever you want it later.
       </p>
+
+      {claimStatus.required && (
+        <div className="mb-8">
+          <InstanceClaimInstructions
+            heading="Next: claim this server"
+          />
+        </div>
+      )}
 
       <section className="mb-8 rounded-lg border border-[var(--border)] p-5">
         <h2 className="mb-2 text-lg font-semibold">1 · Where your notes actually live</h2>
@@ -82,25 +100,38 @@ export default async function WelcomePage() {
           No mystery cloud: everything you write on <code>{host}</code> is stored in one
           database
           {dbUrl.startsWith("file:") ? (
-            <>
-              {" "}
-              file at <code className="rounded bg-[var(--hover)] px-1">{dbLocation}</code>
-            </>
+            claimStatus.isOwner ? (
+              <>
+                {" "}
+                file at <code className="rounded bg-[var(--hover)] px-1">{dbLocation}</code>
+              </>
+            ) : (
+              <> in this server&apos;s local Keel storage</>
+            )
           ) : (
             <> on {dbLocation}</>
           )}
           . Images you paste (screenshots welcome - up to {mb(maxAttachmentBytes())} each,{" "}
           {mb(attachmentQuotaBytes())} in total) go into that same database, so one file is
           truly everything. Local snapshots land in{" "}
-          <code className="rounded bg-[var(--hover)] px-1">{backupRoot()}</code>.
+          {claimStatus.isOwner ? (
+            <code className="rounded bg-[var(--hover)] px-1">{backupRoot()}</code>
+          ) : (
+            "the backup folder configured on this server"
+          )}
+          .
         </p>
-        {!keelEnv("BACKUP_PASSPHRASE") && (
+        {!backupPassphrase.configured && (
           <p className="text-sm text-[var(--danger)]">
-            Snapshots are currently unencrypted - the{" "}
+            {backupPassphrase.source === "managed"
+              ? "The saved snapshot passphrase cannot be decrypted. "
+              : "Snapshots are currently unencrypted. "}
+            The{" "}
             <Link href="/setup#backup-local" className="underline">
               setup guide
             </Link>{" "}
-            shows the one variable that fixes that.
+            shows how the instance owner can save a write-only passphrase in Settings or
+            use a locked host environment override.
           </p>
         )}
       </section>
