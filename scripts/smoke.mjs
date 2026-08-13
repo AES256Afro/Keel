@@ -199,7 +199,7 @@ try {
 
   // 14. Backup now + listed in folder
   await page.click('button:text-is("Back up now")');
-  await page.waitForSelector("text=Backup written");
+  await page.waitForSelector("text=/^Backup .+ written(?: and uploaded to .+)?$/");
   await page.waitForSelector('li:has-text("keel-")');
   ok("backup to folder works and is listed", true);
 
