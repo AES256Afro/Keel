@@ -1,8 +1,19 @@
 # What shipped
 
-Everything below is part of the current release and is verified by the
-repository's automated suites plus rendered browser testing. Grouped by what it
-changes for you.
+## 1.2.3 patch
+
+- Password registration no longer consumes a workspace invitation without
+  mailbox proof. When an owner confirms the now-existing account, membership
+  creation and invite cleanup are atomic, retry-safe, and never change an
+  existing member's role.
+- The end-to-end backup check now covers owner-managed encrypted backup secrets
+  without assuming the browser can read the saved passphrase.
+- Guided source installs ignore their root `data/` directory and `keel.log`, so
+  an operator cannot accidentally stage a notes database or service log.
+
+Everything below first shipped in the 1.2.2 hardening release and remains part
+of 1.2.3. It is verified by the repository's automated suites plus rendered
+browser testing and grouped by what it changes for you.
 
 ---
 

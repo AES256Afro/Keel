@@ -1,6 +1,6 @@
 {
   "name": "keel",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "private": true,
   "description": "Keel, a Notion-like workspace for pages, blocks, and databases. No AI.",
   "scripts": {
