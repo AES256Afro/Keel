@@ -52,7 +52,7 @@ It does not close registration. Use Settings -> Registration and sign-in when
 you decide to restrict or close this server.
 
 If a Keel 1.2.1 CLI install says sign-ups are disabled before any account
-exists, re-run the current installer. Keel 1.2.2 recognizes the exact affected
+exists, re-run the current installer. Keel 1.2.2 and later recognize the exact affected
 empty local configuration and removes the accidental hard signup stop. The
 installer restarts a known managed service automatically; if you started Keel
 manually, stop that process and start it again. Register normally, then generate
