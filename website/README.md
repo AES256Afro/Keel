@@ -16,6 +16,18 @@ npm run site:check
 npx wrangler dev --config website/wrangler.jsonc
 ```
 
+## Refresh the product screenshots
+
+The homepage screenshots come from a real Keel browser session backed by an
+isolated database containing synthetic data. The capture removes that scratch
+database when it finishes, so no local notebook content reaches the website.
+
+```bash
+npm run build
+npm run site:capture
+npm run site:check
+```
+
 ## Deploy
 
 ```bash

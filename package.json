@@ -76,6 +76,7 @@
     "test:templates": "node --experimental-strip-types --no-warnings scripts/templates-check.mjs",
     "test:migrate": "node --experimental-strip-types --no-warnings scripts/migration-replay-check.mjs",
     "check:public": "node scripts/public-safety-check.mjs",
+    "site:capture": "node scripts/capture-website-screenshots.mjs",
     "site:check": "node website/scripts/check-site.mjs",
     "site:deploy": "npx wrangler deploy --config website/wrangler.jsonc"
   },
