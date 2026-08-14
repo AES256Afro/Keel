@@ -21,10 +21,12 @@ export default function DocumentPage({
   page,
   readOnly = false,
   favorite,
+  canShare = false,
 }: {
   page: HeaderPage & { content: string | null };
   readOnly?: boolean;
   favorite?: boolean;
+  canShare?: boolean;
 }) {
   const save = useCallback(
     (content: string) =>
@@ -53,6 +55,7 @@ export default function DocumentPage({
         exportLabel="Markdown"
         readOnly={readOnly}
         favorite={favorite}
+        canShare={canShare}
         stats={stats}
         onEnterFocus={readOnly ? undefined : () => focus.setActive(true)}
         onSplit={page.archived ? undefined : () => setPickerOpen(true)}

@@ -41,6 +41,8 @@ export type AuditAction =
   | "backup.restore"
   | "workspace.import"
   | "workspace.export"
+  | "page.share.create"
+  | "page.share.revoke"
   // Account
   | "account.password"
   | "account.google.link"

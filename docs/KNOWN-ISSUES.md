@@ -1,7 +1,7 @@
 # Known issues
 
 Everything here is real, reproduced, and currently unfixed. Maintained through
-the 1.2.4 release sweep. Anything a sweep found and fixed is not listed - see
+the 1.2.5 release sweep. Anything a sweep found and fixed is not listed - see
 the git log and [CHANGELOG-HARDENING.md](CHANGELOG-HARDENING.md) for what closed.
 
 Nothing here loses data. That is a deliberate bar: data-loss defects were
@@ -29,8 +29,8 @@ These are not app bugs, but they cost real time to rediscover.
 
 ### Browser and production-build requirements
 
-The package exposes 44 named `test:*` commands. `npm test` directly invokes 35
-of them, plus typecheck and lint. Run a production build first: ten included
+The package exposes 48 named `test:*` commands. `npm test` directly invokes 39
+of them, plus typecheck and lint. Run a production build first: twelve included
 suites launch `next start` against isolated databases.
 
 | Suite | Needs |

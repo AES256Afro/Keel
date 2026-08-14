@@ -81,7 +81,8 @@ database URLs, and absolute host paths.
 
 **Writing:** a block editor, Markdown shortcuts, task lists, code blocks,
 `[[wikilinks]]`, backlinks, tags, daily notes, focus mode, split view, sequence
-reading, and pasted-image attachments.
+reading, pasted-image attachments, a global command palette, trash undo and
+retention, and revocable read-only public links for individual documents.
 
 **Structure:** table, list, board, mind-map, and timeline database views;
 records that open as pages; WIP limits; properties; templates; and a stable
@@ -145,11 +146,11 @@ SQLite file directly.
 npm ci
 npm run dev          # http://localhost:3000
 npm run build        # production build
-npm test             # typecheck, lint, and 35 application suites
+npm test             # typecheck, lint, and 39 application suites
 npm run site:check   # validate the static keelnotes.com site
 ```
 
-Ten suites inside `npm test` launch the production server against isolated test
+Twelve suites inside `npm test` launch the production server against isolated test
 databases, so build before running the complete command.
 
 Operational documentation:
@@ -163,7 +164,7 @@ Operational documentation:
 
 ## License
 
-Keel 1.2.4 is source-available under the [Business Source License 1.1](LICENSE).
+Keel 1.2.5 is source-available under the [Business Source License 1.1](LICENSE).
 Personal self-hosting and internal organizational use are allowed. Offering a
 third-party hosted or managed Keel service requires a commercial license. This
 version changes to Apache 2.0 on August 13, 2030. See [LICENSING.md](LICENSING.md)

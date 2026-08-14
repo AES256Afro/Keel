@@ -210,7 +210,8 @@ export async function initServer() {
       result.loginFailures +
       result.auditEvents +
       result.googleLinkStates +
-      result.oauthConnectionStates;
+      result.oauthConnectionStates +
+      result.trashedPages;
     if (total > 0) {
       console.log(
         `[keel] retention sweep: ${result.sessions} expired sessions, ` +
@@ -218,7 +219,8 @@ export async function initServer() {
           `${result.loginFailures} stale login-failure records, ` +
           `${result.auditEvents} expired audit events, ` +
           `${result.googleLinkStates} expired Google link states, ` +
-          `${result.oauthConnectionStates} expired OAuth connection states`
+          `${result.oauthConnectionStates} expired OAuth connection states, ` +
+          `${result.trashedPages} expired trash pages`
       );
     }
   };

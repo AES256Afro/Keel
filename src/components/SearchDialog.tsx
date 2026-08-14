@@ -3,6 +3,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+export interface PaletteCommand {
+  id: string;
+  label: string;
+  description: string;
+  icon: string;
+  keywords?: string;
+  run: () => void | Promise<void>;
+}
+
 interface Snippet {
   text: string;
   matchStart: number;
@@ -81,6 +90,7 @@ export default function SearchDialog({
   onSelect,
   placeholder,
   queryPrefix,
+  commands = [],
 }: {
   open: boolean;
   onClose: () => void;
@@ -92,6 +102,8 @@ export default function SearchDialog({
   placeholder?: string;
   /** Search-syntax terms prepended invisibly, e.g. "type:document". */
   queryPrefix?: string;
+  /** Navigating palettes can offer actions alongside page search results. */
+  commands?: PaletteCommand[];
 }) {
   const router = useRouter();
   // A dialog with `onSelect` is a picker: it hands the chosen page back to its
@@ -152,21 +164,41 @@ export default function SearchDialog({
 
   useEffect(() => {
     if (!visible || !query.trim()) return;
+    const controller = new AbortController();
     const t = setTimeout(async () => {
-      const q = queryPrefix ? `${queryPrefix} ${query}` : query;
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setResults(data.results);
-        setSelected(0);
+      try {
+        const q = queryPrefix ? `${queryPrefix} ${query}` : query;
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
+          signal: controller.signal,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setResults(data.results);
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setResults([]);
       }
     }, 200);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
   }, [query, visible, queryPrefix]);
 
   // Derived, not stored: an empty box shows nothing, without a state round-trip
   // that would briefly render the previous query's hits.
   const results = query.trim() ? fetchedResults : [];
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const matchingCommands = isPicker
+    ? []
+    : commands.filter((command) => {
+        if (!normalizedQuery) return true;
+        return `${command.label} ${command.description} ${command.keywords ?? ""}`
+          .toLocaleLowerCase()
+          .includes(normalizedQuery);
+      });
+  const itemCount = matchingCommands.length + results.length;
 
   const close = () => {
     setVisible(false);
@@ -179,10 +211,28 @@ export default function SearchDialog({
     else router.push(`/p/${r.id}`);
   };
 
+  const runCommand = (command: PaletteCommand) => {
+    close();
+    void command.run();
+  };
+
+  const activateSelected = () => {
+    const command = matchingCommands[selected];
+    if (command) {
+      runCommand(command);
+      return;
+    }
+    const result = results[selected - matchingCommands.length];
+    if (result) openResult(result);
+  };
+
   if (!visible) return null;
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={isPicker ? "Choose a page" : "Search and commands"}
       className="fixed inset-0 z-50 bg-black/30 flex items-start justify-center pt-[15vh]"
       onMouseDown={close}
     >
@@ -193,24 +243,64 @@ export default function SearchDialog({
         <input
           ref={inputRef}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setResults([]);
+            setSelected(0);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Escape") close();
             if (e.key === "ArrowDown") {
               e.preventDefault();
-              setSelected((s) => Math.min(s + 1, results.length - 1));
+              setSelected((s) => Math.min(s + 1, Math.max(itemCount - 1, 0)));
             }
             if (e.key === "ArrowUp") {
               e.preventDefault();
               setSelected((s) => Math.max(s - 1, 0));
             }
-            if (e.key === "Enter" && results[selected]) openResult(results[selected]);
+            if (e.key === "Enter") activateSelected();
           }}
-          placeholder={placeholder ?? "Search… (try in:title, type:database, updated:7d)"}
+          placeholder={
+            placeholder ??
+            (isPicker
+              ? "Search pages…"
+              : "Search pages or run a command… (try in:title, type:database)")
+          }
+          aria-label={isPicker ? "Search pages" : "Search pages or run a command"}
           className="w-full px-4 py-3 text-sm border-b border-[var(--border-soft)] focus:outline-none"
         />
         <div className="max-h-80 overflow-y-auto">
-          {results.map((r, i) => (
+          {matchingCommands.length > 0 && (
+            <div className="px-4 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--faint)]">
+              Commands
+            </div>
+          )}
+          {matchingCommands.map((command, i) => (
+            <button
+              key={`command:${command.id}`}
+              onClick={() => runCommand(command)}
+              onMouseEnter={() => setSelected(i)}
+              className={`w-full flex items-start gap-3 px-4 py-2 text-sm text-left ${
+                i === selected ? "bg-[var(--hover)]" : ""
+              }`}
+            >
+              <span className="mt-0.5" aria-hidden="true">{command.icon}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium">{command.label}</span>
+                <span className="block truncate text-xs text-[var(--faint)]">
+                  {command.description}
+                </span>
+              </span>
+            </button>
+          ))}
+          {results.length > 0 && (
+            <div className="px-4 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--faint)]">
+              Pages
+            </div>
+          )}
+          {results.map((r, resultIndex) => {
+            const i = matchingCommands.length + resultIndex;
+            return (
             <button
               key={r.id}
               onClick={() => openResult(r)}
@@ -230,11 +320,19 @@ export default function SearchDialog({
                 {r.snippet && <Excerpt snippet={r.snippet} />}
               </span>
             </button>
-          ))}
-          {query.trim() && results.length === 0 && (
-            <p className="px-4 py-6 text-sm text-[var(--faint)] text-center">No results</p>
+            );
+          })}
+          {query.trim() && itemCount === 0 && (
+            <p className="px-4 py-6 text-sm text-[var(--faint)] text-center">
+              No matching commands or pages
+            </p>
           )}
         </div>
+        {!isPicker && (
+          <div className="flex gap-4 border-t border-[var(--border-soft)] px-4 py-2 text-[10px] text-[var(--faint)]">
+            <span>↑↓ choose</span><span>↵ open</span><span>esc close</span>
+          </div>
+        )}
       </div>
     </div>
   );

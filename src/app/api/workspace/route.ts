@@ -24,6 +24,7 @@ export async function GET() {
         backupResolvedDir: instanceOwner ? backupDirFor(workspace) : "",
         backupKeep: workspace.backupKeep,
         backupEncrypt: workspace.backupEncrypt,
+        trashRetentionDays: workspace.trashRetentionDays,
         lastBackupAt: workspaceOwner ? workspace.lastBackupAt?.toISOString() ?? null : null,
         lastBackupError: workspaceOwner ? workspace.lastBackupError : null,
         hasScheduledPassphrase: hasConfiguredPassphrase,
@@ -52,6 +53,13 @@ export async function PATCH(req: NextRequest) {
       data.backupKeep = Math.min(365, Math.round(body.backupKeep));
     }
     if (typeof body.backupEncrypt === "boolean") data.backupEncrypt = body.backupEncrypt;
+    if (
+      typeof body.trashRetentionDays === "number" &&
+      Number.isFinite(body.trashRetentionDays) &&
+      body.trashRetentionDays >= 0
+    ) {
+      data.trashRetentionDays = Math.min(3650, Math.round(body.trashRetentionDays));
+    }
     if (body.backupDir === null || typeof body.backupDir === "string") {
       const dir = body.backupDir?.trim() || null;
       // Writing backups anywhere on the filesystem is an operator power, not a
