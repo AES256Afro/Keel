@@ -58,6 +58,9 @@ for (const file of files) {
   }
 
   if (!file.endsWith(".html")) continue;
+  if (text.includes('href="/assets/styles.css"')) {
+    errors.push(`${relative}: stylesheet URL is not cache-versioned`);
+  }
   for (const required of ["<title>", "name=\"description\"", "name=\"viewport\""]) {
     if (!text.includes(required)) errors.push(`${relative}: missing ${required}`);
   }
@@ -67,7 +70,7 @@ for (const file of files) {
       'property="og:image:height" content="630"',
       'property="og:image:alt"',
       'name="twitter:card" content="summary_large_image"',
-      'name="twitter:image" content="https://keelnotes.com/keel-notes-sailboat.png"',
+      'name="twitter:image" content="https://keelnotes.com/keel-notes-sailboat-foundation.png"',
     ]) {
       if (!text.includes(required)) errors.push(`${relative}: incomplete social preview metadata (${required})`);
     }
@@ -89,13 +92,13 @@ for (const file of files) {
 const totalBytes = files.reduce((sum, file) => sum + fs.statSync(file).size, 0);
 const cssBytes = fs.statSync(path.join(root, "assets", "styles.css")).size;
 const jsBytes = fs.statSync(path.join(root, "assets", "site.js")).size;
-const ogBytes = fs.readFileSync(path.join(root, "keel-notes-sailboat.png"));
+const ogBytes = fs.readFileSync(path.join(root, "keel-notes-sailboat-foundation.png"));
 if (
   ogBytes.subarray(1, 4).toString("ascii") !== "PNG" ||
   ogBytes.readUInt32BE(16) !== 1200 ||
   ogBytes.readUInt32BE(20) !== 630
 ) {
-  errors.push("keel-notes-sailboat.png must be a 1200x630 PNG for reliable link previews");
+  errors.push("keel-notes-sailboat-foundation.png must be a 1200x630 PNG for reliable link previews");
 }
 for (const screenshot of ["keel-editor.png", "keel-board.png", "keel-graph.png"]) {
   const screenshotPath = path.join(root, "assets", "screenshots", screenshot);
@@ -113,7 +116,7 @@ for (const screenshot of ["keel-editor.png", "keel-board.png", "keel-graph.png"]
   }
 }
 const homeSource = fs.readFileSync(path.join(root, "index.html"), "utf8");
-const leadImageIndex = homeSource.indexOf('src="/keel-notes-sailboat.png"');
+const leadImageIndex = homeSource.indexOf('src="/keel-notes-sailboat-foundation.png"');
 for (const screenshot of ["keel-editor.png", "keel-board.png", "keel-graph.png"]) {
   const screenshotIndex = homeSource.indexOf(`src="/assets/screenshots/${screenshot}"`);
   if (screenshotIndex === -1) {
@@ -158,9 +161,20 @@ const oldPreviewRedirect = await worker.fetch(
 if (
   oldPreviewRedirect.status !== 301 ||
   oldPreviewRedirect.headers.get("location") !==
-    "https://keelnotes.com/keel-notes-sailboat.png"
+    "https://keelnotes.com/keel-notes-sailboat-foundation.png"
 ) {
   errors.push("worker.js: the former social image URL does not redirect to the sailboat");
+}
+const previousSailboatRedirect = await worker.fetch(
+  new Request("https://keelnotes.com/keel-notes-sailboat.png"),
+  { ASSETS: redirectOnlyAssets }
+);
+if (
+  previousSailboatRedirect.status !== 301 ||
+  previousSailboatRedirect.headers.get("location") !==
+    "https://keelnotes.com/keel-notes-sailboat-foundation.png"
+) {
+  errors.push("worker.js: the previous social image URL does not redirect to the combined artwork");
 }
 if (cssBytes > 80_000) errors.push(`styles.css exceeds 80 KB (${cssBytes} bytes)`);
 if (jsBytes > 20_000) errors.push(`site.js exceeds 20 KB (${jsBytes} bytes)`);
