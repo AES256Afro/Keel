@@ -116,6 +116,16 @@ for (const screenshot of ["keel-editor.png", "keel-board.png", "keel-graph.png"]
   }
 }
 const homeSource = fs.readFileSync(path.join(root, "index.html"), "utf8");
+const stylesSource = fs.readFileSync(path.join(root, "assets", "styles.css"), "utf8");
+if (!/\.nav-links \.button\s*\{[^}]*background:\s*var\(--blue-dark\);[^}]*color:\s*var\(--white\);/s.test(stylesSource)) {
+  errors.push("styles.css: the header Get Keel button must keep its bright accessible treatment");
+}
+if (!/\.feature-card:nth-child\(5\)\s*\{\s*grid-column:\s*1\s*\/\s*-1;\s*\}/.test(stylesSource)) {
+  errors.push("styles.css: feature card 05 must span the full grid instead of collapsing to one column");
+}
+if (!/class="button button-small"[^>]*>Get Keel 1\.2\.5<\/a>/.test(homeSource)) {
+  errors.push("index.html: missing the styled Get Keel header action");
+}
 const leadImageIndex = homeSource.indexOf('src="/keel-notes-sailboat-foundation.png"');
 for (const screenshot of ["keel-editor.png", "keel-board.png", "keel-graph.png"]) {
   const screenshotIndex = homeSource.indexOf(`src="/assets/screenshots/${screenshot}"`);
