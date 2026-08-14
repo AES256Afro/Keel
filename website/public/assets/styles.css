@@ -145,18 +145,14 @@ h3 { font-size: 1.35rem; font-weight: 800; }
 p { margin: 0; }
 
 .hero { padding: clamp(1.5rem, 4vw, 3rem) 0 4.25rem; overflow: hidden; }
-.hero-grid { display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(440px, 0.98fr); align-items: center; gap: 4rem; }
-.hero-lead { margin: 0 auto clamp(4rem, 8vw, 7rem); }
+.hero-lead { margin: 0 auto clamp(3rem, 7vw, 5.5rem); }
 .hero-lead img { display: block; width: 100%; height: auto; border: 1px solid rgba(16, 26, 44, 0.18); border-radius: 22px; box-shadow: var(--shadow); }
+.hero-intro { width: min(calc(100% - 2rem), 900px); }
 .hero h1 em { color: var(--blue-dark); font-style: normal; }
 .hero-copy > p:not(.eyebrow) { max-width: 610px; margin-top: 1.65rem; color: var(--muted); font-size: 1.15rem; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 2rem; }
 .hero-note { display: flex; flex-wrap: wrap; gap: 0.7rem 1.2rem; margin-top: 1.35rem; color: var(--muted); font-size: 0.82rem; font-weight: 700; }
 .hero-note span::before { color: var(--coral); content: "◆"; margin-right: 0.45rem; font-size: 0.58em; vertical-align: 0.15em; }
-
-.hero-artwork { margin: 0; transform: rotate(1deg); }
-.hero-artwork img { display: block; width: 100%; height: auto; border: 1px solid rgba(16, 26, 44, 0.24); border-radius: 18px; box-shadow: var(--shadow); }
-.hero-artwork figcaption { margin-top: .8rem; color: var(--muted); font-size: .72rem; text-align: right; }
 
 .proof-strip { border-block: 1px solid var(--line); background: rgba(255,253,247,.56); }
 .proof-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
@@ -164,6 +160,17 @@ p { margin: 0; }
 .proof-item:first-child { border-left: 1px solid var(--line); }
 .proof-item strong { display: block; font-size: 1.12rem; letter-spacing: -0.025em; }
 .proof-item span { color: var(--muted); font-size: 0.8rem; }
+
+.product-showcase { background: rgba(255, 253, 247, .6); }
+.product-gallery { display: grid; gap: clamp(3rem, 7vw, 5.5rem); }
+.product-shot { margin: 0; }
+.product-shot figcaption { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 1.5rem; align-items: start; margin-bottom: 1.25rem; }
+.product-shot figcaption h3 { font-size: clamp(1.45rem, 3vw, 2.15rem); }
+.product-shot figcaption p { max-width: 66ch; margin-top: .55rem; color: var(--muted); }
+.product-number { color: var(--blue-dark); font: 800 .75rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.product-frame { overflow: hidden; border: 1px solid rgba(16, 26, 44, .22); border-radius: 18px; background: #fff; box-shadow: var(--shadow); }
+.product-frame img { width: 100%; height: auto; }
+.product-scroll-hint { display: none; margin-top: 1rem; color: var(--muted); font-size: .78rem; }
 
 .section { padding: clamp(5rem, 9vw, 8.5rem) 0; }
 .section-tight { padding-top: 1rem; }
@@ -277,8 +284,7 @@ pre { margin: 0; padding: 1.15rem 4.5rem 1.15rem 1.15rem; overflow-x: auto; bord
 [data-motion="ready"] [data-reveal][data-visible="true"] { opacity: 1; transform: translateY(0); }
 
 @media (max-width: 960px) {
-  .hero-grid, .ownership-grid { grid-template-columns: 1fr; }
-  .hero-artwork { max-width: 760px; }
+  .ownership-grid { grid-template-columns: 1fr; }
   .section-heading { grid-template-columns: 1fr; align-items: start; }
   .proof-grid { grid-template-columns: repeat(2, 1fr); }
   .proof-item:nth-child(3) { border-left: 1px solid var(--line); }
@@ -302,8 +308,10 @@ pre { margin: 0; padding: 1.15rem 4.5rem 1.15rem 1.15rem; overflow-x: auto; bord
   .hero { padding-top: 1rem; }
   .hero-lead { margin-bottom: 3.5rem; }
   .hero-lead img { border-radius: 14px; }
-  .hero-grid { gap: 2rem; }
-  .hero-artwork { transform: none; }
+  .product-shot figcaption { grid-template-columns: 1fr; gap: .5rem; }
+  .product-frame { overflow-x: auto; border-radius: 14px; }
+  .product-frame img { width: 760px; max-width: none; }
+  .product-scroll-hint { display: block; }
   .proof-grid { grid-template-columns: 1fr; }
   .proof-item, .proof-item:nth-child(3) { border-left: 1px solid var(--line); }
   .feature-grid { grid-template-columns: 1fr; }

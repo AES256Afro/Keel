@@ -55,6 +55,7 @@ prisma/*.db-shm
 # Release artifacts (scripts/package-release.mjs output)
 /dist/
 /.backup-check/
+/website/.wrangler/
 
 # Tunnel tokens and other deploy credentials live beside the compose file.
 /secrets/
