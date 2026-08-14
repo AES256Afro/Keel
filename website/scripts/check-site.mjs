@@ -97,6 +97,34 @@ if (
 ) {
   errors.push("keel-notes-sailboat.png must be a 1200x630 PNG for reliable link previews");
 }
+for (const screenshot of ["keel-editor.png", "keel-board.png", "keel-graph.png"]) {
+  const screenshotPath = path.join(root, "assets", "screenshots", screenshot);
+  if (!fs.existsSync(screenshotPath)) {
+    errors.push(`assets/screenshots/${screenshot}: missing real-product screenshot`);
+    continue;
+  }
+  const screenshotBytes = fs.readFileSync(screenshotPath);
+  if (
+    screenshotBytes.subarray(1, 4).toString("ascii") !== "PNG" ||
+    screenshotBytes.readUInt32BE(16) !== 1440 ||
+    screenshotBytes.readUInt32BE(20) !== 900
+  ) {
+    errors.push(`assets/screenshots/${screenshot}: must be a 1440x900 PNG`);
+  }
+}
+const homeSource = fs.readFileSync(path.join(root, "index.html"), "utf8");
+const leadImageIndex = homeSource.indexOf('src="/keel-notes-sailboat.png"');
+for (const screenshot of ["keel-editor.png", "keel-board.png", "keel-graph.png"]) {
+  const screenshotIndex = homeSource.indexOf(`src="/assets/screenshots/${screenshot}"`);
+  if (screenshotIndex === -1) {
+    errors.push(`index.html: missing ${screenshot} from the product gallery`);
+  } else if (leadImageIndex === -1 || screenshotIndex < leadImageIndex) {
+    errors.push(`index.html: the combined sailboat must appear before ${screenshot}`);
+  }
+}
+if (homeSource.includes('src="/assets/keel-notes-workspace.png"')) {
+  errors.push("index.html: the former split hero artwork is still rendered");
+}
 const workerModuleUrl = new URL("../src/worker.js", import.meta.url);
 const workerSource = fs.readFileSync(workerModuleUrl, "utf8");
 const { default: worker } = await import(
