@@ -21,8 +21,8 @@ const worker = {
       return Response.redirect(url.toString(), 301);
     }
 
-    if (url.pathname === "/og.png") {
-      url.pathname = "/keel-notes-sailboat.png";
+    if (url.pathname === "/og.png" || url.pathname === "/keel-notes-sailboat.png") {
+      url.pathname = "/keel-notes-sailboat-foundation.png";
       return Response.redirect(url.toString(), 301);
     }
 
@@ -31,7 +31,7 @@ const worker = {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
     if (url.pathname.startsWith("/assets/")) {
       headers.set("Cache-Control", "public, max-age=3600, must-revalidate");
-    } else if (url.pathname === "/keel-notes-sailboat.png") {
+    } else if (url.pathname === "/keel-notes-sailboat-foundation.png") {
       headers.set("Cache-Control", "public, max-age=86400");
     }
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
