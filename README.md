@@ -28,6 +28,7 @@ several devices.
 | --- | --- | --- |
 | **Windows app** | A personal Windows computer | Download the `.exe` from [Releases](https://github.com/AES256Afro/Keel/releases/latest) |
 | **Linux desktop** | A Linux workstation | Download the `.AppImage` or `.deb` from [Releases](https://github.com/AES256Afro/Keel/releases/latest) |
+| **iPhone / iPad source client** | A self-hosted server plus native Apple Pencil drawing | Generate the Xcode project from [docs/IOS.md](docs/IOS.md) |
 | **macOS / Linux server** | A laptop, home server, or VPS | `curl -fsSL https://raw.githubusercontent.com/AES256Afro/Keel/main/install.sh \| bash -s -- --service` |
 | **Windows service** | Keel always running after sign-in | `irm https://raw.githubusercontent.com/AES256Afro/Keel/main/install.ps1 \| iex` |
 | **Docker** | A home server, NAS, or VPS | `docker compose up -d --build` |
@@ -82,7 +83,8 @@ database URLs, and absolute host paths.
 **Writing:** a block editor, Markdown shortcuts, task lists, code blocks,
 `[[wikilinks]]`, backlinks, tags, daily notes, focus mode, split view, sequence
 reading, pasted-image attachments, a global command palette, trash undo and
-retention, and revocable read-only public links for individual documents.
+retention, revocable read-only public links for individual documents, and an
+iOS PencilKit bridge that stores portable PNGs plus editable Apple Pencil ink.
 
 **Structure:** table, list, board, mind-map, and timeline database views;
 records that open as pages; WIP limits; properties; templates; and a stable
@@ -146,7 +148,7 @@ SQLite file directly.
 npm ci
 npm run dev          # http://localhost:3000
 npm run build        # production build
-npm test             # typecheck, lint, and 39 application suites
+npm test             # typecheck, lint, and 40 application suites
 npm run site:check   # validate the static keelnotes.com site
 ```
 
@@ -161,6 +163,7 @@ Operational documentation:
 - [Deployment modes](docs/DEPLOYMENT.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Security policy](SECURITY.md)
+- [iOS, iPadOS, and Apple Pencil](docs/IOS.md)
 
 ## License
 
