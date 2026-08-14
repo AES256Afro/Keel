@@ -42,21 +42,35 @@ for (const file of files) {
   const relative = path.relative(root, file);
   const bytes = fs.readFileSync(file);
   const text = bytes.toString("utf8");
+  const textual = /\.(?:html|css|js|svg|txt|xml)$/i.test(file);
 
-  if (text.includes("\u2014")) errors.push(`${relative}: contains a Unicode em dash`);
-  if (/tail[0-9a-f]{8,}\.ts\.net/i.test(text) || /\/Users\/[A-Za-z0-9._-]+\//.test(text)) {
-    errors.push(`${relative}: contains private host metadata`);
-  }
-  const lowerText = text.toLowerCase();
-  for (const literal of privateLiterals) {
-    if (lowerText.includes(literal.toLowerCase())) {
-      errors.push(`${relative}: contains an operator-supplied private identifier`);
+  if (textual) {
+    if (text.includes("\u2014")) errors.push(`${relative}: contains a Unicode em dash`);
+    if (/tail[0-9a-f]{8,}\.ts\.net/i.test(text) || /\/Users\/[A-Za-z0-9._-]+\//.test(text)) {
+      errors.push(`${relative}: contains private host metadata`);
+    }
+    const lowerText = text.toLowerCase();
+    for (const literal of privateLiterals) {
+      if (lowerText.includes(literal.toLowerCase())) {
+        errors.push(`${relative}: contains an operator-supplied private identifier`);
+      }
     }
   }
 
   if (!file.endsWith(".html")) continue;
   for (const required of ["<title>", "name=\"description\"", "name=\"viewport\""]) {
     if (!text.includes(required)) errors.push(`${relative}: missing ${required}`);
+  }
+  if (text.includes('property="og:image"')) {
+    for (const required of [
+      'property="og:image:width" content="1200"',
+      'property="og:image:height" content="630"',
+      'property="og:image:alt"',
+      'name="twitter:card" content="summary_large_image"',
+      'name="twitter:image" content="https://keelnotes.com/keel-notes-sailboat.png"',
+    ]) {
+      if (!text.includes(required)) errors.push(`${relative}: incomplete social preview metadata (${required})`);
+    }
   }
   if (/\sstyle="/i.test(text)) errors.push(`${relative}: inline style violates the site CSP`);
   if (/<script(?![^>]*\ssrc=)[^>]*>/i.test(text)) errors.push(`${relative}: inline script violates the site CSP`);
@@ -75,6 +89,14 @@ for (const file of files) {
 const totalBytes = files.reduce((sum, file) => sum + fs.statSync(file).size, 0);
 const cssBytes = fs.statSync(path.join(root, "assets", "styles.css")).size;
 const jsBytes = fs.statSync(path.join(root, "assets", "site.js")).size;
+const ogBytes = fs.readFileSync(path.join(root, "keel-notes-sailboat.png"));
+if (
+  ogBytes.subarray(1, 4).toString("ascii") !== "PNG" ||
+  ogBytes.readUInt32BE(16) !== 1200 ||
+  ogBytes.readUInt32BE(20) !== 630
+) {
+  errors.push("keel-notes-sailboat.png must be a 1200x630 PNG for reliable link previews");
+}
 const workerModuleUrl = new URL("../src/worker.js", import.meta.url);
 const workerSource = fs.readFileSync(workerModuleUrl, "utf8");
 const { default: worker } = await import(
@@ -100,6 +122,17 @@ if (
   wwwRedirect.headers.get("location") !== "https://keelnotes.com/security/?from=www"
 ) {
   errors.push("worker.js: www requests do not redirect exactly to the HTTPS apex URL");
+}
+const oldPreviewRedirect = await worker.fetch(
+  new Request("https://keelnotes.com/og.png"),
+  { ASSETS: redirectOnlyAssets }
+);
+if (
+  oldPreviewRedirect.status !== 301 ||
+  oldPreviewRedirect.headers.get("location") !==
+    "https://keelnotes.com/keel-notes-sailboat.png"
+) {
+  errors.push("worker.js: the former social image URL does not redirect to the sailboat");
 }
 if (cssBytes > 80_000) errors.push(`styles.css exceeds 80 KB (${cssBytes} bytes)`);
 if (jsBytes > 20_000) errors.push(`site.js exceeds 20 KB (${jsBytes} bytes)`);

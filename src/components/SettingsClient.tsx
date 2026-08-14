@@ -18,6 +18,7 @@ interface WorkspaceSettings {
   backupResolvedDir: string;
   backupKeep: number;
   backupEncrypt: boolean;
+  trashRetentionDays: number;
   lastBackupAt: string | null;
   lastBackupError: string | null;
   hasScheduledPassphrase: boolean;
@@ -692,6 +693,7 @@ export default function SettingsClient({
   const [keep, setKeep] = useState(workspace.backupKeep);
   const [dir, setDir] = useState(workspace.backupDir ?? "");
   const [encrypt, setEncrypt] = useState(workspace.backupEncrypt);
+  const [trashRetentionDays, setTrashRetentionDays] = useState(workspace.trashRetentionDays);
   const [backups, setBackups] = useState(initialBackups);
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(
     null
@@ -1679,6 +1681,43 @@ export default function SettingsClient({
             </button>
           </div>
         </label>
+        <div className="mt-5 border-t border-[var(--border-soft)] pt-4">
+          <label className="block text-sm">
+            <span className="text-[var(--muted)]">Automatically empty trash after</span>
+            <div className="mt-1 flex flex-wrap gap-2">
+              <select
+                value={trashRetentionDays}
+                onChange={(event) => setTrashRetentionDays(Number(event.target.value))}
+                disabled={!isOwner}
+                className="min-w-48 rounded border border-[var(--border)] bg-[var(--elevated)] px-2 py-2"
+              >
+                <option value={0}>Never</option>
+                <option value={7}>7 days</option>
+                <option value={30}>30 days</option>
+                <option value={90}>90 days</option>
+                <option value={365}>1 year</option>
+              </select>
+              <button
+                onClick={() =>
+                  patchWorkspace(
+                    { trashRetentionDays },
+                    trashRetentionDays === 0
+                      ? "Trash will be kept until you delete it."
+                      : `Trash will be emptied after ${trashRetentionDays} days.`
+                  )
+                }
+                disabled={busy || !isOwner}
+                className="rounded bg-[var(--btn-bg)] px-4 py-2 text-sm font-medium text-[var(--btn-fg)] hover:bg-[var(--btn-hover)] disabled:opacity-50"
+              >
+                Save trash retention
+              </button>
+            </div>
+          </label>
+          <p className="mt-2 text-xs text-[var(--faint)]">
+            Moving a page to trash is reversible. After this retention period, Keel
+            permanently removes the page and its archived sub-pages during maintenance.
+          </p>
+        </div>
       </Section>
 
       {isOwner && (

@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import SaveIndicator from "@/components/SaveIndicator";
+import PageShareButton from "@/components/PageShareButton";
 import { useAutosave } from "@/lib/useAutosave";
 
 const EMOJIS = [
@@ -30,6 +31,7 @@ export default function PageHeader({
   canDuplicate = true,
   readOnly = false,
   favorite,
+  canShare = false,
   onTitleChange,
 }: {
   page: HeaderPage;
@@ -40,6 +42,8 @@ export default function PageHeader({
   readOnly?: boolean;
   /** Initial favorite state; the star toggle renders only when provided. */
   favorite?: boolean;
+  /** Workspace owners may create a revocable read-only link for active documents. */
+  canShare?: boolean;
   onTitleChange?: (title: string) => void;
   /** Live word count, shown next to the page actions. */
   stats?: { words: number; readingMinutes: number };
@@ -211,7 +215,7 @@ export default function PageHeader({
           )}
         </div>
       )}
-      <div className="keel-page-actions flex items-center justify-end gap-3 text-sm text-[var(--muted)] mb-6">
+      <div className="keel-page-actions flex flex-wrap items-center justify-end gap-3 text-sm text-[var(--muted)] mb-6">
         {stats !== undefined && stats.words > 0 && (
           <span
             className="mr-auto text-xs tabular-nums text-[var(--faint)]"
@@ -247,6 +251,7 @@ export default function PageHeader({
             📖 Read
           </a>
         )}
+        {canShare && <PageShareButton pageId={page.id} />}
         {favorite !== undefined && (
           <button
             onClick={() => void toggleFavorite(!starred)}

@@ -1,7 +1,7 @@
 # Keel roadmap
 
-Where Keel is, and where it could go. Current through the 1.2.4 security,
-correctness, performance, packaging, and responsive-layout passes. Ordered by
+Where Keel is, and where it could go. Current through the 1.2.5 everyday-speed,
+sharing, security, performance, packaging, and responsive-layout passes. Ordered by
 value ÷ effort, not by how interesting it is to build.
 
 ## Shipped (1.x)
@@ -13,50 +13,40 @@ attachments (in-DB) · full-text search · WebAuthn 2FA · audit log · encrypte
 snapshots to local/Drive/OneDrive/Azure/R2 · Litestream replication · OneNote
 mirror · responsive mobile browser shell · in-app restart + update check · the
 `keel` CLI · GitHub release tarballs · guided shell/PowerShell installers ·
-Docker/cloud installs · migration between supported install types.
+Docker/cloud installs · migration between supported install types · global
+command palette · trash undo and retention · revocable public document links.
 
 ## Near term - high value, low risk
 
-1. **Public page sharing (read-only links).** The `RichDoc` renderer built for
-   sequence reading already renders stored document JSON safely server-side; a
-   `/share/<token>` route over it is mostly plumbing (a `PageShare` table, a
-   token, a toggle in the page header). The single most-requested notebook
-   feature Keel doesn't have.
-2. **Server-side database filter/sort/pagination.** Views currently sort and
+1. **Server-side database filter/sort/pagination.** Views currently sort and
    filter in memory. For databases past a few thousand rows this is the first
    real scaling wall. Push the active view's filter/sort into the Prisma query;
    the saved-view model already carries the spec.
-3. **Command palette (⌘K everywhere).** Search exists; make it a jump-to-
-   anything: pages, views, actions ("new daily note", "back up now"). Low
-   effort, big perceived-speed win.
-4. **Trash retention + undo toast.** Soft-delete exists; add "undo" after
-   delete and a configurable purge age. Cheap insurance against the one
-   irreversible action in the app.
 
 ## Medium term - real features, real effort
 
-5. **Real-time collaboration.** The hard one. TipTap has a Yjs binding; the
+2. **Real-time collaboration.** The hard one. TipTap has a Yjs binding; the
    blocker is the single-process SQLite model - collaboration wants a shared
    awareness channel. Scoped as "two tabs of the same user first, multi-user
    later," it's tractable. Highest ceiling of anything here.
-6. **Templated databases / property formulas.** A `formula` property type
+3. **Templated databases / property formulas.** A `formula` property type
    (rollups, simple arithmetic across properties). Notion's stickiest feature.
-7. **Calendar view** as a sixth saved-view type, over any date property -
+4. **Calendar view** as a sixth saved-view type, over any date property -
    reuses the timeline view's date plumbing.
-8. **Import from Notion / Obsidian / Markdown folder.** The OneNote mirror
+5. **Import from Notion / Obsidian / Markdown folder.** The OneNote mirror
    proved the ingestion pattern; a Markdown/Notion-export importer widens the
    on-ramp enormously.
 
 ## Longer term - wishlist
 
-9. **End-to-end encryption option** for the notebook at rest (beyond snapshot
+6. **End-to-end encryption option** for the notebook at rest (beyond snapshot
     encryption) - a genuine differentiator, genuinely hard.
-10. **Plugin/extension API** for custom blocks and property types.
-11. **Independent workspace ownership and cross-instance federation.** Switching
+7. **Plugin/extension API** for custom blocks and property types.
+8. **Independent workspace ownership and cross-instance federation.** Switching
     among workspaces that invited the same account already ships. The remaining
     work is creating and owning several independent notebooks, then optionally
     linking notebooks across Keel servers.
-12. **AI, opt-in and local-only.** The README says "No AI" as a promise about
+9. **AI, opt-in and local-only.** The README says "No AI" as a promise about
     the default, not a prohibition forever; if it ever lands it should be a
     local model the user runs, never a phone-home.
 
