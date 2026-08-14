@@ -108,6 +108,7 @@ CREATE TABLE "Workspace" (
     "backupEncrypt" BOOLEAN NOT NULL DEFAULT false,
     "lastBackupAt" DATETIME,
     "lastBackupError" TEXT,
+    "trashRetentionDays" INTEGER NOT NULL DEFAULT 30,
     "cloudProvider" TEXT,
     "cloudRefreshToken" TEXT,
     "cloudEmail" TEXT,
@@ -165,6 +166,19 @@ CREATE TABLE "Page" (
     CONSTRAINT "Page_parentPageId_fkey" FOREIGN KEY ("parentPageId") REFERENCES "Page" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Page_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "Page_editedById_fkey" FOREIGN KEY ("editedById") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "PageShare" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "pageId" TEXT NOT NULL,
+    "tokenHash" TEXT NOT NULL,
+    "createdById" TEXT NOT NULL,
+    "expiresAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "PageShare_pageId_fkey" FOREIGN KEY ("pageId") REFERENCES "Page" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "PageShare_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -382,6 +396,15 @@ CREATE INDEX "Page_workspaceId_archivedAt_updatedAt_idx" ON "Page"("workspaceId"
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Page_workspaceId_externalSource_externalId_key" ON "Page"("workspaceId", "externalSource", "externalId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PageShare_pageId_key" ON "PageShare"("pageId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PageShare_tokenHash_key" ON "PageShare"("tokenHash");
+
+-- CreateIndex
+CREATE INDEX "PageShare_expiresAt_idx" ON "PageShare"("expiresAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Database_pageId_key" ON "Database"("pageId");

@@ -13,8 +13,12 @@
   <meta property="og:title" content="Keel Notes | Your notes need a steady foundation">
   <meta property="og:description" content="A self-hosted notebook with pages, databases, kanban, mind maps, wikilinks, and graphs in a workspace you control.">
   <meta property="og:url" content="https://keelnotes.com/">
-  <meta property="og:image" content="https://keelnotes.com/og.png">
+  <meta property="og:image" content="https://keelnotes.com/keel-notes-sailboat.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="A navy sailboat made from note pages crossing bright blue waves">
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://keelnotes.com/keel-notes-sailboat.png">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -30,14 +34,23 @@
         <a href="/install/">Install</a>
         <a href="/storage/">Your data</a>
         <a href="/security/">Security</a>
-        <a class="button button-small" href="https://github.com/AES256Afro/Keel/releases/latest">Get Keel 1.2.4</a>
+        <a class="button button-small" href="https://github.com/AES256Afro/Keel/releases/latest">Get Keel 1.2.5</a>
       </div>
     </nav>
   </header>
 
   <main id="main">
     <section class="hero">
-      <div class="hero-grid shell">
+      <figure class="hero-lead shell" data-reveal>
+        <img
+          src="/keel-notes-sailboat.png"
+          width="1200"
+          height="630"
+          alt="A navy sailboat made from note pages crossing bright blue waves"
+          fetchpriority="high"
+        >
+      </figure>
+      <div class="hero-grid hero-intro shell">
         <div class="hero-copy" data-reveal>
           <p class="eyebrow">Self-hosted notes, built to last</p>
           <h1>Your notes need a <em>steady foundation.</em></h1>
@@ -53,36 +66,16 @@
           </div>
         </div>
 
-        <div class="product-stage" aria-label="Illustration of the Keel workspace" data-reveal>
-          <div class="stage-disc one"></div>
-          <div class="stage-disc two"></div>
-          <div class="app-window">
-            <div class="app-bar"><i></i><i></i><i></i><span>keel / field-notes</span></div>
-            <div class="app-body">
-              <aside class="app-sidebar">
-                <strong>Field Notes</strong>
-                <div class="app-nav-row active"><i>⌂</i> Home</div>
-                <div class="app-nav-row"><i>□</i> Daily notes</div>
-                <div class="app-nav-row"><i>↗</i> Graph</div>
-                <div class="app-nav-row"><i>#</i> Tags</div>
-                <div class="app-nav-row"><i>◎</i> Projects</div>
-              </aside>
-              <div class="app-content">
-                <div class="app-kicker">Thursday, August 13</div>
-                <h2>Launch checklist</h2>
-                <p>A quiet place for every decision, task, link, and idea that needs to survive the week.</p>
-                <div class="note-list">
-                  <div class="note-line done"><i></i><span>Confirm release checks</span><span>Done</span></div>
-                  <div class="note-line"><i></i><span>Publish install guide</span><span>Today</span></div>
-                  <div class="note-line"><i></i><span>Test encrypted backup</span><span>Next</span></div>
-                  <div class="note-line"><i></i><span>Review [[launch notes]]</span><span>Linked</span></div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="floating-card graph">37 connected pages<small>Workspace graph</small></div>
-          <div class="floating-card backup">Backup verified<small>Encrypted snapshot</small></div>
-        </div>
+        <figure class="hero-artwork" data-reveal>
+          <img
+            src="/assets/keel-notes-workspace.png"
+            width="1200"
+            height="630"
+            alt="Keel Notes beside a notebook window showing a launch checklist"
+            loading="lazy"
+          >
+          <figcaption>The launch-checklist artwork remains part of the Keel story.</figcaption>
+        </figure>
       </div>
     </section>
 
@@ -125,6 +118,11 @@
             <h3>Move when you want</h3>
             <p>Export the complete workspace, restore it elsewhere, or move a local install into Docker. Your deployment is a choice, not a sentence.</p>
           </article>
+          <article class="feature-card accent" data-reveal>
+            <span class="feature-number">05</span>
+            <h3>Share one page, not the notebook</h3>
+            <p>Create an expiring or revocable read-only document link. Keel shows the secret once and keeps only its digest.</p>
+          </article>
         </div>
       </div>
     </section>
@@ -166,7 +164,7 @@
 
     <section class="cta">
       <div class="cta-box shell" data-reveal>
-        <div><h2>Put your notes on something solid.</h2><p>Keel 1.2.4 is available for Windows, Linux, macOS, Docker, and self-hosted servers.</p></div>
+        <div><h2>Put your notes on something solid.</h2><p>Keel 1.2.5 is available for Windows, Linux, macOS, Docker, and self-hosted servers.</p></div>
         <a class="button button-light" href="/install/">Install Keel</a>
       </div>
     </section>

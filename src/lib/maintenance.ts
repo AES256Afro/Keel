@@ -1,4 +1,4 @@
-// Background retention. Three tables in Keel grow without bound:
+// Background retention for short-lived operational rows and workspace trash.
 //
 //   • Session      - rows are checked for expiry at read time but never deleted.
 //   • Notification - one row per mention/assignment, kept forever.
@@ -12,6 +12,7 @@ import { pruneLoginFailures } from "@/lib/rate-limit";
 import { pruneAuditEvents } from "@/lib/audit";
 import { pruneExpiredGoogleAccountLinkStates } from "@/lib/google-account-link";
 import { pruneExpiredOAuthConnectionStates } from "@/lib/oauth-connection-state";
+import { pruneExpiredTrash } from "@/lib/trash-retention";
 
 /** Read notifications older than this are dropped. Unread ones are kept. */
 const NOTIFICATION_TTL_DAYS = 90;
@@ -29,6 +30,7 @@ export interface SweepResult {
   auditEvents: number;
   googleLinkStates: number;
   oauthConnectionStates: number;
+  trashedPages: number;
 }
 
 export async function runMaintenance(): Promise<SweepResult> {
@@ -40,6 +42,7 @@ export async function runMaintenance(): Promise<SweepResult> {
     auditEvents: 0,
     googleLinkStates: 0,
     oauthConnectionStates: 0,
+    trashedPages: 0,
   };
 
   try {
@@ -85,6 +88,12 @@ export async function runMaintenance(): Promise<SweepResult> {
     result.oauthConnectionStates = await pruneExpiredOAuthConnectionStates();
   } catch (err) {
     console.error("[keel] OAuth connection state sweep failed", err);
+  }
+
+  try {
+    result.trashedPages = await pruneExpiredTrash();
+  } catch (err) {
+    console.error("[keel] trash retention sweep failed", err);
   }
 
   return result;

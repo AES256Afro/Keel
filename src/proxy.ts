@@ -22,6 +22,7 @@ function isReserved(pathname: string): boolean {
     pathname.startsWith("/site") ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/register") ||
+    pathname.startsWith("/share") ||
     pathname === "/desktop-linked" ||
     pathname.includes(".")
   );
@@ -141,6 +142,10 @@ export function proxy(req: NextRequest) {
   // past the proxy's body buffer rather than through it. Each enforces
   // auth and rate limits internally.
   res.headers.set("Content-Security-Policy", csp);
+  if (pathname.startsWith("/share/")) {
+    res.headers.set("Cache-Control", "no-store");
+    res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
+  }
   return res;
 }
 

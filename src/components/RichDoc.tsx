@@ -4,7 +4,7 @@ import { parseDoc, safeHref, safeImageSrc, type PMNode } from "@/lib/richtext";
 /**
  * Stored editor JSON rendered as static React - no editor instance, no client
  * JS, no HTML strings. Used wherever a document is read rather than written:
- * the sequence-reading view today, public page sharing whenever it lands.
+ * sequence reading and public page sharing.
  *
  * The node set is closed (only Keel's editor writes these documents), so an
  * unknown type rendering as its children is a safety net, not a feature.
@@ -52,7 +52,9 @@ function Inline({ nodes }: { nodes?: PMNode[] }) {
   );
 }
 
-function Block({ node }: { node: PMNode }) {
+export type RichDocImageSource = (src: string) => string | null;
+
+function Block({ node, imageSrc }: { node: PMNode; imageSrc?: RichDocImageSource }) {
   switch (node.type) {
     case "paragraph":
       return (
@@ -73,25 +75,25 @@ function Block({ node }: { node: PMNode }) {
     case "bulletList":
       return (
         <ul className="mb-3 list-disc pl-6">
-          <Blocks nodes={node.content} />
+          <Blocks nodes={node.content} imageSrc={imageSrc} />
         </ul>
       );
     case "orderedList":
       return (
         <ol className="mb-3 list-decimal pl-6">
-          <Blocks nodes={node.content} />
+          <Blocks nodes={node.content} imageSrc={imageSrc} />
         </ol>
       );
     case "listItem":
       return (
         <li>
-          <Blocks nodes={node.content} tight />
+          <Blocks nodes={node.content} tight imageSrc={imageSrc} />
         </li>
       );
     case "taskList":
       return (
         <ul className="mb-3 list-none pl-1">
-          <Blocks nodes={node.content} />
+          <Blocks nodes={node.content} imageSrc={imageSrc} />
         </ul>
       );
     case "taskItem":
@@ -101,14 +103,14 @@ function Block({ node }: { node: PMNode }) {
             {node.attrs?.checked ? "☑" : "☐"}
           </span>
           <div className={node.attrs?.checked ? "text-[var(--muted)] line-through" : ""}>
-            <Blocks nodes={node.content} tight />
+            <Blocks nodes={node.content} tight imageSrc={imageSrc} />
           </div>
         </li>
       );
     case "blockquote":
       return (
         <blockquote className="mb-3 border-l-2 border-[var(--border)] pl-4 text-[var(--muted)]">
-          <Blocks nodes={node.content} />
+          <Blocks nodes={node.content} imageSrc={imageSrc} />
         </blockquote>
       );
     case "codeBlock":
@@ -120,18 +122,27 @@ function Block({ node }: { node: PMNode }) {
     case "horizontalRule":
       return <hr className="my-6 border-[var(--border-soft)]" />;
     case "image": {
-      const src = safeImageSrc(node.attrs?.src);
+      const storedSrc = safeImageSrc(node.attrs?.src);
+      const src = storedSrc && imageSrc ? imageSrc(storedSrc) : storedSrc;
       if (!src) return null;
       const alt = typeof node.attrs?.alt === "string" ? node.attrs.alt : "";
       // eslint-disable-next-line @next/next/no-img-element -- same-origin, size unknown
       return <img src={src} alt={alt} loading="lazy" className="mb-3 max-w-full rounded" />;
     }
     default:
-      return node.content ? <Blocks nodes={node.content} /> : null;
+      return node.content ? <Blocks nodes={node.content} imageSrc={imageSrc} /> : null;
   }
 }
 
-function Blocks({ nodes, tight = false }: { nodes?: PMNode[]; tight?: boolean }) {
+function Blocks({
+  nodes,
+  tight = false,
+  imageSrc,
+}: {
+  nodes?: PMNode[];
+  tight?: boolean;
+  imageSrc?: RichDocImageSource;
+}) {
   if (!nodes) return null;
   return (
     <>
@@ -142,15 +153,21 @@ function Blocks({ nodes, tight = false }: { nodes?: PMNode[]; tight?: boolean })
             <Inline nodes={node.content} />
           </span>
         ) : (
-          <Block key={i} node={node} />
+          <Block key={i} node={node} imageSrc={imageSrc} />
         )
       )}
     </>
   );
 }
 
-export default function RichDoc({ content }: { content: string | null }) {
+export default function RichDoc({
+  content,
+  imageSrc,
+}: {
+  content: string | null;
+  imageSrc?: RichDocImageSource;
+}) {
   const doc = parseDoc(content);
   if (!doc) return <p className="text-sm text-[var(--faint)]">Empty page.</p>;
-  return <Blocks nodes={doc.content} />;
+  return <Blocks nodes={doc.content} imageSrc={imageSrc} />;
 }
