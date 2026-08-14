@@ -11,5 +11,5 @@
 /assets/*
   Cache-Control: public, max-age=3600, must-revalidate
 
-/keel-notes-sailboat.png
+/keel-notes-sailboat-foundation.png
   Cache-Control: public, max-age=86400
