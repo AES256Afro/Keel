@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EditorContent, ReactRenderer, useEditor, type Editor as TipTapEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
@@ -17,6 +17,11 @@ import WikiLinkMenu, {
   type WikiLinkItem,
   type WikiLinkMenuRef,
 } from "./WikiLinkMenu";
+import {
+  applePencilBridgeAvailable,
+  KEEL_PENCIL_READY_EVENT,
+  requestApplePencilDrawing,
+} from "@/lib/apple-pencil";
 
 // Every Suggestion plugin needs its own key. TipTap defaults them all to
 // `suggestion$`, so a second one - the [[ picker below - throws
@@ -278,6 +283,14 @@ const ImageNode = Node.create({
     return {
       src: { default: null },
       alt: { default: null },
+      pencil: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-keel-pencil"),
+        renderHTML: (attributes) =>
+          typeof attributes.pencil === "string"
+            ? { "data-keel-pencil": attributes.pencil }
+            : {},
+      },
     };
   },
 
@@ -386,6 +399,9 @@ export default function Editor({
   /** Enables image paste/drop - uploads need a page to belong to. */
   pageId?: string | null;
 }) {
+  const [pencilAvailable, setPencilAvailable] = useState(false);
+  const [pencilBusy, setPencilBusy] = useState(false);
+  const [selectedPencilUrl, setSelectedPencilUrl] = useState<string | null>(null);
   // The plugin closes over its first render; the current id is read via a ref
   // so a late-arriving prop still routes uploads correctly.
   const pageIdRef = useRef(pageId);
@@ -398,6 +414,13 @@ export default function Editor({
   useEffect(() => {
     typewriterRef.current = typewriter;
   }, [typewriter]);
+
+  useEffect(() => {
+    const detect = () => setPencilAvailable(applePencilBridgeAvailable());
+    detect();
+    window.addEventListener(KEEL_PENCIL_READY_EVENT, detect);
+    return () => window.removeEventListener(KEEL_PENCIL_READY_EVENT, detect);
+  }, []);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -431,9 +454,38 @@ export default function Editor({
       if (typewriterRef.current) scrollCaretToCentre(editor);
     },
     onSelectionUpdate: ({ editor }) => {
+      const pencil = editor.getAttributes("image").pencil;
+      setSelectedPencilUrl(typeof pencil === "string" ? pencil : null);
       if (typewriterRef.current) scrollCaretToCentre(editor);
     },
   });
+
+  const openPencilKit = async () => {
+    if (!editor || !pageId || pencilBusy) return;
+    setPencilBusy(true);
+    try {
+      const result = await requestApplePencilDrawing({
+        action: selectedPencilUrl ? "edit" : "draw",
+        pageId,
+        drawingUrl: selectedPencilUrl ?? undefined,
+      });
+      if (!result) return;
+      const attributes = {
+        src: result.image.url,
+        alt: result.image.name,
+        pencil: result.drawing.url,
+      };
+      if (selectedPencilUrl && editor.isActive("image")) {
+        editor.chain().focus().updateAttributes("image", attributes).run();
+      } else {
+        editor.chain().focus().insertContent({ type: "image", attrs: attributes }).run();
+      }
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Drawing could not be saved.");
+    } finally {
+      setPencilBusy(false);
+    }
+  };
 
   // useEditor re-applies its options on every render as
   // `setOptions({ ...options, editable: this.editor.isEditable })` - it pins
@@ -458,6 +510,24 @@ export default function Editor({
 
   return (
     <div className="keel-editor text-[15px] leading-relaxed">
+      {editable && pageId && pencilAvailable && (
+        <div className="mb-3 flex flex-wrap items-center gap-2" data-keel-pencil-toolbar>
+          <button
+            type="button"
+            onClick={openPencilKit}
+            disabled={pencilBusy}
+            className="rounded-md border border-[var(--border)] bg-[var(--elevated)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--hover)] disabled:cursor-wait disabled:opacity-60"
+            aria-label={selectedPencilUrl ? "Edit selected Apple Pencil drawing" : "Draw with Apple Pencil"}
+          >
+            {pencilBusy
+              ? "Opening PencilKit..."
+              : selectedPencilUrl
+                ? "Edit Pencil drawing"
+                : "Draw with Apple Pencil"}
+          </button>
+          <span className="text-xs text-[var(--faint)]">Pressure, tilt, palm rejection, and editable ink</span>
+        </div>
+      )}
       <EditorContent editor={editor} />
     </div>
   );
