@@ -101,6 +101,8 @@ button, input { font: inherit; }
   text-decoration: none;
 }
 .nav-links a:hover, .nav-links a[aria-current="page"] { color: var(--blue-dark); }
+.nav-links .button { border-color: var(--blue-dark); background: var(--blue-dark); color: var(--white); box-shadow: 0 8px 20px rgba(46, 104, 186, .24); }
+.nav-links .button:hover { border-color: #2559a0; background: #2559a0; color: var(--white); }
 .nav-toggle { display: none; }
 
 .button {
@@ -183,6 +185,7 @@ p { margin: 0; }
 .feature-card { min-height: 260px; padding: 1.65rem; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(255,253,247,.72); }
 .feature-card:nth-child(1), .feature-card:nth-child(4) { grid-column: span 7; }
 .feature-card:nth-child(2), .feature-card:nth-child(3) { grid-column: span 5; }
+.feature-card:nth-child(5) { grid-column: 1 / -1; }
 .feature-number { display: inline-grid; width: 34px; height: 34px; place-items: center; margin-bottom: 3.5rem; border-radius: 50%; background: var(--ink); color: var(--white); font: 700 .78rem ui-monospace, monospace; }
 .feature-card p { max-width: 52ch; margin-top: .9rem; color: var(--muted); }
 .feature-card.accent { background: var(--ink); color: var(--white); }
@@ -290,6 +293,7 @@ pre { margin: 0; padding: 1.15rem 4.5rem 1.15rem 1.15rem; overflow-x: auto; bord
   .proof-grid { grid-template-columns: repeat(2, 1fr); }
   .proof-item:nth-child(3) { border-left: 1px solid var(--line); }
   .feature-card:nth-child(n) { grid-column: span 6; }
+  .feature-card:nth-child(5) { grid-column: 1 / -1; }
   .route-grid { grid-template-columns: 1fr; }
   .route-card { min-height: 0; }
   .guide-layout { grid-template-columns: 1fr; gap: 2rem; }
