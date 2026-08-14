@@ -97,6 +97,9 @@ jobs:
       - name: Responsive workspace shell contract
         run: npm run test:mobile-ui
 
+      - name: iOS and Apple Pencil source contract
+        run: npm run test:ios
+
   # Keel ships two database dialects. SQLite is covered by the job above (every
   # test script uses it); this proves the PostgreSQL path - the one Azure and
   # every managed host use - actually migrates and serves.
@@ -305,6 +308,29 @@ jobs:
       - name: Data and backup ACLs fail closed
         shell: pwsh
         run: ./scripts/windows-installer-acl-check.ps1
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate the iOS project
+        run: cd ios && xcodegen generate
+      - name: Build for the iOS Simulator
+        run: |
+          xcodebuild \
+            -project ios/Keel.xcodeproj \
+            -scheme Keel \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build
 
   audit:
     runs-on: ubuntu-latest
