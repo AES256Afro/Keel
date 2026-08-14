@@ -47,6 +47,7 @@ model User {
   favorites          Favorite[]
   visits             RecentVisit[]
   attachments        Attachment[]
+  pageShares         PageShare[]         @relation("PageShareCreator")
   instanceClaimToken InstanceClaimToken?
 
   // Null until the first-run welcome has been seen (or skipped) - the only
@@ -185,6 +186,9 @@ model Workspace {
   lastBackupAt        DateTime?
   lastBackupError     String?
 
+  // Soft-deleted pages are purged after this many days. Zero keeps them forever.
+  trashRetentionDays Int @default(30)
+
   // Cloud backup connection (Google Drive / OneDrive), owner-managed.
   cloudProvider     String? // google | onedrive
   cloudRefreshToken String?
@@ -275,6 +279,7 @@ model Page {
   linksIn     PageLink[]      @relation("LinkTarget")
   tags        PageTag[]
   attachments Attachment[]
+  share       PageShare?
 
   @@unique([workspaceId, externalSource, externalId])
   @@index([workspaceId, parentPageId])
@@ -286,6 +291,24 @@ model Page {
   @@index([workspaceId, updatedAt])
   // Search also excludes archived pages - this covers the whole predicate.
   @@index([workspaceId, archivedAt, updatedAt])
+}
+
+// A capability URL for one document. Only the SHA-256 digest is stored, so a
+// database copy cannot reveal live public links. One active link per page keeps
+// revocation and regeneration understandable.
+model PageShare {
+  id          String    @id @default(cuid())
+  pageId      String    @unique
+  tokenHash   String    @unique
+  createdById String
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  page      Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  createdBy User @relation("PageShareCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
 }
 
 model Database {

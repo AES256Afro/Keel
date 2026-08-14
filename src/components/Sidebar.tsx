@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import type { PageTreeNode } from "@/lib/types";
 import { localDayKey } from "@/lib/writing";
 import SaveIndicator from "@/components/SaveIndicator";
-import SearchDialog from "@/components/SearchDialog";
+import SearchDialog, { type PaletteCommand } from "@/components/SearchDialog";
 import KeelMark from "@/components/KeelMark";
 import TemplatePicker from "@/components/TemplatePicker";
 import NotificationsBell from "@/components/NotificationsBell";
@@ -380,6 +380,39 @@ export default function Sidebar({
    * either, so it gets its own dismissible pill rather than the Try-again one.
    */
   const [warning, setWarning] = useState<string | null>(null);
+  const [undoTrash, setUndoTrash] = useState<{ pageId: string } | null>(null);
+
+  useEffect(() => {
+    if (!undoTrash) return;
+    const timer = window.setTimeout(() => setUndoTrash(null), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [undoTrash]);
+
+  const restoreTrashedPage = useCallback(
+    async (pageId: string) => {
+      const run = async (): Promise<void> => {
+        const res = await send<unknown>(
+          `/api/pages/${pageId}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ archived: false }),
+          },
+          "Couldn't restore that page."
+        );
+        if (!res.ok) {
+          actionFailed(res.message, () => void run());
+          return;
+        }
+        setActionError(null);
+        setUndoTrash(null);
+        router.push(`/p/${pageId}`);
+        router.refresh();
+      };
+      await run();
+    },
+    [router, actionFailed]
+  );
 
   const createPage = useCallback(
     async (parentId: string | null, type: "document" | "database") => {
@@ -477,6 +510,7 @@ export default function Sidebar({
           return;
         }
         setActionError(null);
+        setUndoTrash({ pageId });
         // Only leave the page once the server agrees it's in the trash - walking
         // away from a failed PATCH is how a page looks deleted and isn't.
         if (pageId === activeId) router.push("/");
@@ -486,6 +520,69 @@ export default function Sidebar({
     },
     [router, activeId, actionFailed]
   );
+
+  const paletteCommands: PaletteCommand[] = [
+    ...(canEdit
+      ? [
+          {
+            id: "new-page",
+            label: "New page",
+            description: "Create a blank document at the top level",
+            icon: "📄",
+            keywords: "create document note",
+            run: () => createPage(null, "document"),
+          },
+          {
+            id: "new-database",
+            label: "New database",
+            description: "Create a database at the top level",
+            icon: "🗂️",
+            keywords: "create table board list timeline mind map",
+            run: () => createPage(null, "database"),
+          },
+        ]
+      : []),
+    {
+      id: "today",
+      label: "Open today's note",
+      description: "Jump to the daily note for your local date",
+      icon: "📅",
+      keywords: "daily journal",
+      run: () => router.push(`/today?d=${localDayKey()}`),
+    },
+    {
+      id: "graph",
+      label: "Open workspace graph",
+      description: "Explore links between pages",
+      icon: "◍",
+      keywords: "connections backlinks",
+      run: () => router.push("/graph"),
+    },
+    {
+      id: "tags",
+      label: "Browse tags",
+      description: "Find pages grouped by tag",
+      icon: "🏷️",
+      keywords: "labels",
+      run: () => router.push("/tags"),
+    },
+    {
+      id: "trash",
+      label: "Open trash",
+      description: "Restore or permanently delete archived pages",
+      icon: "🗑️",
+      keywords: "deleted restore archive",
+      run: () => router.push("/trash"),
+    },
+    {
+      id: "settings",
+      label: "Open settings",
+      description: "Manage your account, backups, integrations, and server",
+      icon: "⚙️",
+      keywords: "preferences account backup integration server",
+      run: () => router.push("/settings"),
+    },
+  ];
 
   const switchWorkspace = async (id: string) => {
     setSwitcherOpen(false);
@@ -627,7 +724,7 @@ export default function Sidebar({
           }}
           className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-[var(--hover)] text-[var(--muted)]"
         >
-          🔍 Search
+          🔍 Search and commands
           <span className="ml-auto text-[10px] text-[var(--faint)] border border-[var(--border)] rounded px-1">
             ⌘K
           </span>
@@ -800,9 +897,36 @@ export default function Sidebar({
           </button>
         </div>
       )}
+      {undoTrash && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{ bottom: `${12 + 5 * 44}px` }}
+          className="fixed right-4 z-40 flex max-w-sm items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--elevated)] px-3 py-2 text-sm shadow-lg"
+        >
+          <span className="min-w-0 flex-1">Moved page to trash.</span>
+          <button
+            onClick={() => void restoreTrashedPage(undoTrash.pageId)}
+            className="shrink-0 rounded border border-[var(--link)] px-2 py-0.5 font-medium text-[var(--link)]"
+          >
+            Undo
+          </button>
+          <button
+            aria-label="Dismiss undo"
+            onClick={() => setUndoTrash(null)}
+            className="shrink-0 px-1 text-[var(--faint)]"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       </aside>
-      <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
+      <SearchDialog
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        commands={paletteCommands}
+      />
       <TemplatePicker open={templatesOpen} onClose={() => setTemplatesOpen(false)} />
     </>
   );

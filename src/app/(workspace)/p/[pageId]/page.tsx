@@ -154,6 +154,7 @@ export default async function PageRoute({
         page={{ ...base, content: page.content }}
         readOnly={readOnly}
         favorite={favorite}
+        canShare={ctx.role === "owner" && !page.archivedAt && page.externalSource === null}
       />
       {extras("max-w-3xl")}
     </>

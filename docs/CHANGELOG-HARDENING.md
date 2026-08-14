@@ -1,5 +1,19 @@
 # What shipped
 
+## 1.2.5 everyday-speed and sharing release
+
+- Cmd/Ctrl-K is now a global command palette for page search, creation, daily
+  notes, graph, tags, trash, and Settings.
+- Moving a page to trash offers a ten-second Undo action. Workspace owners can
+  automatically purge trash after 7, 30, 90, or 365 days, or retain it forever.
+- Workspace owners can create expiring or non-expiring read-only links for
+  individual documents. Link secrets are shown once and stored only as SHA-256
+  digests. Regeneration, revocation, trash, expiry, and deletion invalidate
+  access; attachment reads remain scoped to the exact shared page.
+- keelnotes.com now opens with the sailboat artwork and uses the same dedicated
+  1200x630 image for Discord and other social previews. The earlier workspace
+  artwork remains on the homepage beneath it.
+
 ## 1.2.4 patch
 
 - Re-running a guided installer now stops only the verified managed Keel
@@ -308,8 +322,8 @@ checks the rendered behavior at a phone viewport.
 ## 10. Tests and CI
 
 There was no CI, no test runner, and `npm run lint` was broken (no ESLint config,
-no dependency). The package now exposes 44 named `test:*` commands. The main
-command runs typecheck, lint, and 35 application suites against the current
+no dependency). The package now exposes 48 named `test:*` commands. The main
+command runs typecheck, lint, and 39 application suites against the current
 production build:
 
 ```bash

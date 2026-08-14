@@ -74,15 +74,18 @@ SQLite and PostgreSQL.
   another page to nest it, or onto the drop zone to move it to the root. Cycle
   moves are rejected server-side.
 - **Trash** - archiving sets `archivedAt` on the whole subtree; restoring clears
-  it (and re-roots the page if its parent is still trashed). Hard delete removes
-  the subtree leaves-first.
+  it (and re-roots the page if its parent is still trashed). The sidebar offers
+  a ten-second undo. Workspace owners choose a 7, 30, 90, or 365 day automatic
+  purge window, or keep trash forever. Hard delete removes the subtree
+  leaves-first.
 - **Databases** - the database page owns view state client-side (current view,
   filter text, sort). Filter/sort run client-side over the loaded records, which
   is fine at v1 scale; push them into queries when workspaces grow.
 - **Board view** - groups by a `select` property (picker appears when there are
   several), drag cards between columns to update the value.
-- **Search** - SQL `contains` over titles and content JSON. Good enough for v1;
-  swap for Postgres full-text or an index when needed.
+- **Search and commands** - Cmd/Ctrl-K opens one palette for indexed page search
+  and common navigation/creation actions. Page search reads maintained plain
+  text rather than serialized editor JSON.
 - **Export** - Markdown via a small ProseMirror-JSON→Markdown renderer
   (`src/lib/markdown.ts`); CSV via `src/lib/csv.ts` with proper quoting.
 
@@ -141,8 +144,15 @@ SQLite and PostgreSQL.
 - **Workspace switcher** - users own one workspace and can be members of
   others; the active workspace is a cookie (`keel-workspace`) validated
   against membership on every request, switchable from the sidebar header.
+- **Public document links** (`PageShare`) - a workspace owner can generate one
+  read-only capability URL per active Keel document. Only the SHA-256 token
+  digest is stored. Replacing or revoking a link invalidates it immediately;
+  optional expiry is checked on every read. Shared attachment reads are scoped
+  to the exact page and workspace. Public responses are `no-store` and
+  `noindex`; databases, records, trash, and external mirrors cannot be shared.
 - Per-page permissions and permission inheritance (beyond workspace roles)
-  remain deferred, as does the `commenter` role until comments exist.
+  remain deferred, as does the `commenter` role until comments exist. Public
+  links are bearer capabilities, not a new workspace role.
 
 ## Comments, notifications, favorites (phase 5 tail + phase 6)
 
@@ -215,19 +225,14 @@ drag-handles (see below).
 | Area | Status |
 | --- | --- |
 | Custom user templates ("save page as template") | Deep duplicate covers the workflow for now; a saved-template library is the follow-up. |
-| Per-page permissions & inheritance | Workspace-level roles shipped; page-level ACLs are the next layer. |
-| Block-level comments | Page comments shipped; block anchoring needs stable block IDs in the editor. |
-| Block drag-handle reordering | Blocks reorder via keyboard/cut-paste; a drag-handle extension is the follow-up editor task. |
-| Backlinks & page history | Phase 6 items not yet started. |
-| Direct OneDrive / Google Drive API upload | Needs OAuth app registration per provider; synced-folder backups cover the use case meanwhile. |
-| Sharing & permissions | Schema groundwork exists (`WorkspaceMember.role`); invite flow, per-page permissions, and inheritance are not built. |
-| Comments, mentions, notifications | After sharing. |
-| Activity history / audit events | Not started; add an `audit_events` table written from the API layer. |
-| More property types (person, email, phone, file, created-by/time) | Person needs sharing; files need object storage. |
-| Calendar / gallery / timeline views, saved views with per-view filters | Table/list/board cover v1; a `views` table comes with saved views. |
+| Per-page permissions & inheritance | Workspace roles, invitations, and revocable public document links ship. Signed-in page ACL inheritance remains deferred. |
+| Block-level comments | Page comments, mentions, and notifications ship; block anchoring needs stable block IDs in the editor. |
+| Direct OneDrive / Google Drive API upload | Both ship, alongside Azure, R2, synced-folder, and local backups. |
+| More property types (email, phone, file, created-by/time) | Person and progress ship. The remaining types need explicit editor, import, and export semantics. |
+| Calendar and gallery views | Timeline and saved views ship. Calendar can reuse date-property plumbing; gallery still needs a media-card contract. |
 | Block drag-handle reordering | Blocks reorder via cut/paste and keyboard today; a drag handle extension is the follow-up editor task. |
-| Import, HTML/PDF export, JSON backup | Markdown + CSV export shipped first per the plan. |
-| Real-time editing, offline, mobile, formulas, automations | Explicitly out of scope for v1. |
+| HTML/PDF export | Markdown, CSV, complete JSON import/export, and encrypted snapshots ship. Print-oriented HTML/PDF remains deferred. |
+| Real-time editing, offline, native mobile, formulas, automations | Responsive mobile web ships; the remaining items are explicitly outside v1. |
 
 ## Verification
 

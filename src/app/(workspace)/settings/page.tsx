@@ -78,6 +78,7 @@ export default async function SettingsPage({
         backupResolvedDir: workspaceOwner && instanceOwner ? backupDirFor(ctx.workspace) : "",
         backupKeep: ctx.workspace.backupKeep,
         backupEncrypt: ctx.workspace.backupEncrypt,
+        trashRetentionDays: ctx.workspace.trashRetentionDays,
         // When and why the machine last wrote a file, and raw provider text.
         lastBackupAt: workspaceOwner ? ctx.workspace.lastBackupAt?.toISOString() ?? null : null,
         lastBackupError: workspaceOwner ? ctx.workspace.lastBackupError : null,

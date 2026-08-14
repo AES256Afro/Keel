@@ -21,12 +21,17 @@ const worker = {
       return Response.redirect(url.toString(), 301);
     }
 
+    if (url.pathname === "/og.png") {
+      url.pathname = "/keel-notes-sailboat.png";
+      return Response.redirect(url.toString(), 301);
+    }
+
     const response = await env.ASSETS.fetch(request);
     const headers = new Headers(response.headers);
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
     if (url.pathname.startsWith("/assets/")) {
       headers.set("Cache-Control", "public, max-age=3600, must-revalidate");
-    } else if (url.pathname === "/og.png") {
+    } else if (url.pathname === "/keel-notes-sailboat.png") {
       headers.set("Cache-Control", "public, max-age=86400");
     }
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
