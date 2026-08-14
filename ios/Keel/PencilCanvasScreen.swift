@@ -81,7 +81,7 @@ final class PencilCanvasViewController: UIViewController, PKCanvasViewDelegate, 
         toolbarItems = [
             UIBarButtonItem(barButtonSystemItem: .undo, target: self, action: #selector(undoTapped)),
             UIBarButtonItem(barButtonSystemItem: .redo, target: self, action: #selector(redoTapped)),
-            .flexibleSpace(),
+            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
             UIBarButtonItem(title: "Ruler", style: .plain, target: self, action: #selector(toggleRuler)),
         ]
         navigationController?.isToolbarHidden = false
@@ -162,11 +162,5 @@ final class PencilCanvasViewController: UIViewController, PKCanvasViewDelegate, 
                 }
             }
         }
-    }
-}
-
-private extension UIBarButtonItem {
-    static func flexibleSpace() -> UIBarButtonItem {
-        UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
     }
 }
