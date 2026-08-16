@@ -1,6 +1,6 @@
 # Keel roadmap
 
-Where Keel is, and where it could go. Current through the 1.2.5 everyday-speed,
+Where Keel is, and where it could go. Current through the 1.2.6 link-free release,
 sharing, security, performance, packaging, and responsive-layout passes. Ordered by
 value ÷ effort, not by how interesting it is to build.
 

@@ -15,7 +15,9 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import {
+  assertNoArtifactLinks,
   assertNoSensitiveArtifactPaths,
+  copyArtifactTreeDereferenced,
   scrubSensitiveArtifactPaths,
 } from "./artifact-safety.mjs";
 
@@ -53,7 +55,7 @@ run("npx next build", { KEEL_STANDALONE: "1", NEXT_TELEMETRY_DISABLED: "1" });
 // 2. Assemble the server bundle (same recipe the desktop build uses).
 const standalone = path.join(root, ".next", "standalone");
 const server = path.join(out, "server");
-fs.cpSync(standalone, server, { recursive: true });
+copyArtifactTreeDereferenced(standalone, server, "Next.js standalone output");
 removeBuildMachinePath(server);
 const copies = [
   [path.join(root, ".next", "static"), path.join(server, ".next", "static")],
@@ -66,7 +68,7 @@ const copies = [
 for (const [from, to] of copies) {
   if (!fs.existsSync(from)) continue;
   fs.mkdirSync(path.dirname(to), { recursive: true });
-  fs.cpSync(from, to, { recursive: true, force: true });
+  copyArtifactTreeDereferenced(from, to, `release input ${path.relative(root, from)}`);
 }
 
 // Never ship local data or secrets: tracing can pull the dev database, local
@@ -139,10 +141,12 @@ lists status, stop, update, export, and the rest. Your data lives in ~/.keel.
 
 // Scrubbing is defense in depth. The independent scan fails closed if tracing,
 // a later copy step, or a new secret location escapes it.
+assertNoArtifactLinks(out, "release");
 assertNoSensitiveArtifactPaths(out, "release");
 
 // 4. Tarball for the GitHub release / Homebrew.
 run(`tar -czf ${JSON.stringify(path.join(dist, `${name}.tar.gz`))} -C ${JSON.stringify(dist)} ${JSON.stringify(name)}`);
+run(`node scripts/archive-safety-check.mjs ${JSON.stringify(path.join(dist, `${name}.tar.gz`))}`);
 const size = fs.statSync(path.join(dist, `${name}.tar.gz`)).size;
 console.log(`\n✔ dist/${name}.tar.gz (${(size / 1048576).toFixed(1)} MB)`);
 console.log(`✔ dist/${name}/ - test it with: node dist/${name}/bin/keel.mjs start --foreground`);
