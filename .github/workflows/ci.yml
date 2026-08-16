@@ -188,7 +188,7 @@ jobs:
         run: npm run test:cli-portability
 
       - name: Release artifact secret scrubbing
-        run: npm run test:artifact-safety
+        run: npm run test:artifact-safety && npm run test:archive-safety
 
       # Both build args, because the Prisma client is generated per dialect and
       # a broken Postgres image would only surface on a managed host.

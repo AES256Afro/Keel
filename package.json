@@ -1,6 +1,6 @@
 {
   "name": "keel",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "private": true,
   "description": "Keel, a Notion-like workspace for pages, blocks, and databases. No AI.",
   "scripts": {
@@ -46,8 +46,9 @@
     "test:page-share-browser": "node scripts/page-share-browser-check.mjs",
     "test:compose": "node scripts/compose-config-check.mjs",
     "test:artifact-safety": "node scripts/artifact-safety-check.mjs",
+    "test:archive-safety": "node scripts/archive-safety-test.mjs",
     "test:tunnel-security": "node --experimental-strip-types --no-warnings scripts/tunnel-security-check.mjs",
-    "test": "npm run typecheck && npm run lint && npm run test:integrity && npm run test:artifact-safety && npm run test:writing && npm run test:autosave && npm run test:mindmap && npm run test:graph && npm run test:timeline && npm run test:search && npm run test:links && npm run test:daily && npm run test:attachments && npm run test:read && npm run test:onboarding && npm run test:restart && npm run test:restore-nesting && npm run test:backup && npm run test:cloud-transfer && npm run test:access && npm run test:installer-recovery && npm run test:cli-portability && npm run test:claim && npm run test:signup && npm run test:oauth-settings && npm run test:workspace-secrets && npm run test:oauth-ui && npm run test:operator-settings && npm run test:operator-ui && npm run test:google-link && npm run test:oauth-state && npm run test:mobile-ui && npm run test:ios && npm run test:palette && npm run test:trash-retention && npm run test:page-share && npm run test:page-share-browser && npm run test:tunnel-security && npm run test:auth && npm run test:auth-invariants && npm run test:templates && npm run test:migrate",
+    "test": "npm run typecheck && npm run lint && npm run test:integrity && npm run test:artifact-safety && npm run test:archive-safety && npm run test:writing && npm run test:autosave && npm run test:mindmap && npm run test:graph && npm run test:timeline && npm run test:search && npm run test:links && npm run test:daily && npm run test:attachments && npm run test:read && npm run test:onboarding && npm run test:restart && npm run test:restore-nesting && npm run test:backup && npm run test:cloud-transfer && npm run test:access && npm run test:installer-recovery && npm run test:cli-portability && npm run test:claim && npm run test:signup && npm run test:oauth-settings && npm run test:workspace-secrets && npm run test:oauth-ui && npm run test:operator-settings && npm run test:operator-ui && npm run test:google-link && npm run test:oauth-state && npm run test:mobile-ui && npm run test:ios && npm run test:palette && npm run test:trash-retention && npm run test:page-share && npm run test:page-share-browser && npm run test:tunnel-security && npm run test:auth && npm run test:auth-invariants && npm run test:templates && npm run test:migrate",
     "check:audit": "npm audit --omit=dev --audit-level=high",
     "test:mindmap": "node --experimental-strip-types --no-warnings scripts/mindmap-check.mjs",
     "db:provider": "node scripts/db-provider.mjs",

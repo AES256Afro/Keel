@@ -1,7 +1,7 @@
 # Known issues
 
 Everything here is real, reproduced, and currently unfixed. Maintained through
-the 1.2.5 release sweep. Anything a sweep found and fixed is not listed - see
+the 1.2.6 release sweep. Anything a sweep found and fixed is not listed - see
 the git log and [CHANGELOG-HARDENING.md](CHANGELOG-HARDENING.md) for what closed.
 
 Nothing here loses data. That is a deliberate bar: data-loss defects were

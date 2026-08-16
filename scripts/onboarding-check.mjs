@@ -21,6 +21,13 @@ const DB_URL = testDatabaseUrl(root, DB_NAME);
 const PORT = Number(process.env.ONBOARD_PORT || 3204);
 const BASE = `http://127.0.0.1:${PORT}`;
 
+// detectStatus reads owner-managed settings before the HTTP checks begin, so
+// bind and provision the same isolated database before importing application
+// modules. CI supplies DATABASE_URL; local runs must be equally deterministic.
+process.env.DATABASE_URL = DB_URL;
+cleanDatabase(root, DB_NAME);
+prepareDatabase(root, DB_URL);
+
 register("./ts-loader.mjs", import.meta.url);
 const { parseAzureSasUrl } = await import(
   pathToFileURL(path.join(root, "src/lib/cloud.ts")).href
@@ -101,9 +108,7 @@ check("any provider → no nag", needsBackupAttention({ cloudProvider: "azure" }
 
 /* ---------------- HTTP ---------------- */
 
-cleanDatabase(root, DB_NAME);
 console.log("\nPreparing scratch database…");
-prepareDatabase(root, DB_URL);
 
 const prisma = await testPrisma(root, DB_URL);
 const fresh = await prisma.user.create({

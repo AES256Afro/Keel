@@ -1,5 +1,17 @@
 # What shipped
 
+## 1.2.6 link-free server artifacts
+
+- Linux and macOS server release archives now contain only regular files and
+  directories. Next.js build links are materialized during packaging, and any
+  broken, escaping, cyclic, or surviving symbolic link fails the build.
+- Release packaging and GitHub Actions independently inspect the completed
+  tarball before extraction or publication. Unsafe paths, unexpected archive
+  roots, links, hard links, special files, diagnostics, and oversized inputs
+  all fail closed.
+- Do not automate extraction of the 1.2.5 Linux server tarball. It contains an
+  absolute build-runner symbolic link. Use 1.2.6 or later for server installs.
+
 ## 1.2.5 everyday-speed and sharing release
 
 - Cmd/Ctrl-K is now a global command palette for page search, creation, daily
