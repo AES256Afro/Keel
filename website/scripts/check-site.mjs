@@ -123,7 +123,7 @@ if (!/\.nav-links \.button\s*\{[^}]*background:\s*var\(--blue-dark\);[^}]*color:
 if (!/\.feature-card:nth-child\(5\)\s*\{\s*grid-column:\s*1\s*\/\s*-1;\s*\}/.test(stylesSource)) {
   errors.push("styles.css: feature card 05 must span the full grid instead of collapsing to one column");
 }
-if (!/class="button button-small"[^>]*>Get Keel 1\.2\.5<\/a>/.test(homeSource)) {
+if (!/class="button button-small"[^>]*>Get Keel 1\.2\.6<\/a>/.test(homeSource)) {
   errors.push("index.html: missing the styled Get Keel header action");
 }
 const leadImageIndex = homeSource.indexOf('src="/keel-notes-sailboat-foundation.png"');
