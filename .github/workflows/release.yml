@@ -40,6 +40,7 @@ jobs:
         run: |
           set -e
           TARBALL=$(ls dist/*.tar.gz | head -1)
+          node scripts/archive-safety-check.mjs "$TARBALL"
           DIR=$(mktemp -d)
           tar -xzf "$TARBALL" -C "$DIR"
           APP=$(ls -d "$DIR"/keel-*)
