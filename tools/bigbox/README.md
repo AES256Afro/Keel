@@ -125,6 +125,9 @@ run the GUI locally with `--host`, which needs no listener on the box at all.
 | `bigbox doctor --fix` | Applies the safe fixes and re-checks. `--dry-run` previews. |
 | `bigbox restart keel` | Restart Keel via whatever runs it (systemd / launchd / Scheduled Task / Docker), then wait until `/api/health` answers. Also `start`, `stop`, and targets `pihole`, `dns`, `all`. |
 | `bigbox logs keel -f` | The right log source per platform: journald, `keel.log`, or `docker logs`. `bigbox logs pihole -f` tails Pi-hole. |
+| `bigbox stacks` | Every compose project on the box - discovered from the labels compose stamps on its containers, so nothing registers anything. Per-container verdicts: restart loops, unhealthy, exited-despite-restart-policy, healthcheck lies, no-volume data risk. |
+| `bigbox stack <name> restart` | Per-stack verbs for any project, not just Keel: `status`, `restart`, `logs [-f]`, `update` (pull + up -d). |
+| `bigbox ports` | Every published port with who can reach it (loopback / lan / tailnet / world) - and a reminder that Docker publishes bypass ufw, so the firewall does not cover them. |
 | `bigbox net` | Walks the stack in order - default route → router → raw internet (`1.1.1.1`) → DNS via Pi-hole → DNS via upstream → system resolver → HTTPS → Keel - and tells you in plain words whose fault it is (ISP, router, Pi-hole, resolver config, or Keel). `--fix` restarts Pi-hole's resolver when it's the culprit. |
 
 ### Data - backups & storage
@@ -219,6 +222,27 @@ replaced, whether it's list or scalar form.
 For a non-Docker install there's no compose step: it edits Keel's own `.env`
 and restarts the service.
 
+## The whole box, not just Keel
+
+`bigbox stacks` treats the box as what it is - a fleet of compose projects.
+Discovery is free: compose labels every container with its project, service and
+config file. On top of that the tool layers the failure modes that actually
+happen:
+
+- **Restart loops** - a container flapping under its restart policy is named,
+  with its restart count, instead of silently churning forever.
+- **Healthcheck lies** - a container reporting *unhealthy* while its published
+  port answers is a misconfigured healthcheck, not an outage. bigbox probes the
+  host port and says which it is, so nobody restarts a working service.
+- **Died despite its restart policy** - exited with `restart: always` means
+  something is wrong enough that Docker gave up.
+- **No volumes** - a running container with zero mounts loses everything it
+  writes on recreate.
+
+The watchdog pages on real failures across the whole fleet (with the last log
+lines in the alert), stays quiet on lying healthchecks, and `status` and the
+GUI's **Stacks** tab show every project with the same verdicts.
+
 ## Alerts - the watchdog can finally reach you
 
 ```bash
@@ -282,6 +306,8 @@ Ideas that came up designing this; the checked ones are in this version:
   `bigbox backup now` so blocklists and local DNS records are covered too.
 - 💭 **Speed-test history** - periodic `speedtest`/iperf3 results logged over
   time, so "the internet feels slow" becomes a graph.
+- ✅ **Fleet management** - every compose stack discovered, per-stack verbs,
+  restart-loop and healthcheck-lie detection, and the published-port exposure map.
 - 💭 **Linux/Windows app launchers** - generate a `.desktop` entry and a Start
   Menu shortcut the way macOS gets its `.app`.
 - 💭 **Menu-bar / tray applet** - health colour at a glance without opening
