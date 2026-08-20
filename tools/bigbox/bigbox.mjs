@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * bigbox — troubleshoot and manage a BigBox home server (Keel + Pi-hole).
+ * bigbox - troubleshoot and manage a BigBox home server (Keel + Pi-hole).
  *
- * One file, zero dependencies, Node 20+. Runs on Windows, Linux and macOS —
+ * One file, zero dependencies, Node 20+. Runs on Windows, Linux and macOS -
  * directly on the box, or from another machine with `--host user@bigbox`
  * (streams itself over SSH, nothing to install on the far side beyond Node,
  * which Keel already requires).
@@ -170,7 +170,7 @@ function findKeelDir() {
  * Resolve a containerised Keel's real paths on the host.
  *
  * A Docker install keeps DATABASE_URL and KEEL_BACKUP_DIR *inside* the
- * container, so there is no host .env to read — but the data itself is almost
+ * container, so there is no host .env to read - but the data itself is almost
  * always on a bind mount. Map the container-side paths through the mount table
  * and we can snapshot the database straight from the host: no `docker exec`,
  * no sqlite3 inside the image (the very thing whose absence silently breaks
@@ -201,7 +201,7 @@ function containerPaths() {
         return path.join(m.source, path.relative(m.dest, p));
       }
     }
-    return null; // inside the container's own writable layer — not reachable
+    return null; // inside the container's own writable layer - not reachable
   };
 
   const dburl = env.DATABASE_URL || '';
@@ -238,7 +238,7 @@ function keelConfig() {
     dbPath = p;
   }
   if (!dir && !dbPath) {
-    // No host install — this is probably a container. Cost is one docker
+    // No host install - this is probably a container. Cost is one docker
     // inspect, and only on machines where nothing was found on disk.
     const c = containerPaths();
     if (c) {
@@ -344,7 +344,7 @@ function keelCtl(svc, action) { // action: start | stop | restart → {ok, detai
     const r = action === 'start' ? run('launchctl', ['load', '-w', svc.plist]) : run('launchctl', ['unload', svc.plist]);
     return { ok: r.ok, detail: r.ok ? action : r.err };
   }
-  if (!seq) return { ok: false, detail: `no service manager found for Keel — install with install.${IS_WIN ? 'ps1 -Service' : 'sh --service'}` };
+  if (!seq) return { ok: false, detail: `no service manager found for Keel - install with install.${IS_WIN ? 'ps1 -Service' : 'sh --service'}` };
   for (const [cmd, args] of seq[action]) {
     const r = run(cmd, args, { timeout: 60000 });
     if (!r.ok && action !== 'restart') return { ok: false, detail: r.err || r.out };
@@ -395,7 +395,7 @@ function piholeCtl(ph, action) { // start | stop | restart | restartdns
     }
     const via = have('systemctl') ? run('sudo', ['-n', 'systemctl', action === 'restartdns' ? 'restart' : action, 'pihole-FTL'], { timeout: 60000 }) : { ok: false, err: 'no systemctl' };
     if (via.ok) return { ok: true, detail: `pihole-FTL ${action}` };
-    return { ok: false, detail: `${via.err || via.out} — try: sudo systemctl ${action === 'restartdns' ? 'restart' : action} pihole-FTL` };
+    return { ok: false, detail: `${via.err || via.out} - try: sudo systemctl ${action === 'restartdns' ? 'restart' : action} pihole-FTL` };
   }
   return { ok: false, detail: 'Pi-hole not found on this machine' };
 }
@@ -490,7 +490,7 @@ function sqliteQuery(db, sql) {
   }
   try {
     // node:sqlite ships with Node 22.5+; on Node 20 this throws and we report "skipped".
-    // Silence its ExperimentalWarning — it would interleave with our output.
+    // Silence its ExperimentalWarning - it would interleave with our output.
     const origEmit = process.emit;
     process.emit = function (event, warning, ...rest) {
       if (event === 'warning' && warning?.name === 'ExperimentalWarning' && /SQLite/i.test(warning?.message || '')) return false;
@@ -540,14 +540,14 @@ async function runChecks(cfg, { net = true } = {}) {
   if (cfg.dir) {
     add('Keel install', 'ok', cfg.dir);
   } else if (svc.type === 'docker') {
-    add('Keel install', 'info', `no host install — Keel runs in container ${svc.name}`);
+    add('Keel install', 'info', `no host install - Keel runs in container ${svc.name}`);
   } else {
-    add('Keel install', 'fail', 'no Keel directory found — pass --dir or set KEEL_DIR');
+    add('Keel install', 'fail', 'no Keel directory found - pass --dir or set KEEL_DIR');
   }
 
   // Node version
   const major = parseInt(process.versions.node, 10);
-  add('Node.js', major >= 20 ? 'ok' : 'warn', `v${process.versions.node}${major >= 20 ? '' : ' — Keel needs 20+'}`);
+  add('Node.js', major >= 20 ? 'ok' : 'warn', `v${process.versions.node}${major >= 20 ? '' : ' - Keel needs 20+'}`);
 
   // Keel service
   const state = keelServiceState(svc);
@@ -575,7 +575,7 @@ async function runChecks(cfg, { net = true } = {}) {
 
   // Database
   if (cfg.isPostgres) {
-    add('Database', 'info', 'Postgres (managed externally — not checked here)');
+    add('Database', 'info', 'Postgres (managed externally - not checked here)');
   } else if (cfg.dbPath) {
     if (!fs.existsSync(cfg.dbPath)) {
       add('Database', 'fail', `${cfg.dbPath} does not exist`);
@@ -586,7 +586,7 @@ async function runChecks(cfg, { net = true } = {}) {
       if (fs.existsSync(wal)) {
         const wsz = fs.statSync(wal).size;
         if (wsz > 64 * 1024 * 1024) {
-          add('WAL journal', 'warn', `write-ahead log is ${fmtBytes(wsz)} — a checkpoint will fold it back into the db`, {
+          add('WAL journal', 'warn', `write-ahead log is ${fmtBytes(wsz)} - a checkpoint will fold it back into the db`, {
             desc: 'checkpoint the WAL (PRAGMA wal_checkpoint(TRUNCATE))',
             apply: async () => {
               const r = sqliteQuery(cfg.dbPath, 'PRAGMA wal_checkpoint(TRUNCATE);');
@@ -605,14 +605,14 @@ async function runChecks(cfg, { net = true } = {}) {
       }
     }
   } else if (svc.type === 'docker') {
-    // Reached only when the database could NOT be mapped to a host path — so
+    // Reached only when the database could NOT be mapped to a host path - so
     // either there are no mounts at all, or the database sits outside them.
     // Both mean the data lives in the container's writable layer and dies with
     // it, which is worth saying plainly rather than filing under 'info'.
     const mounts = run('docker', ['inspect', '-f', '{{range .Mounts}}{{.Source}} → {{.Destination}}  {{end}}', svc.name]).out.trim();
     add('Database', 'warn', mounts
-      ? `not on any mounted volume — it lives in the container layer and is lost if the container is recreated (mounts: ${mounts})`
-      : 'the container has NO volume mounts — all data dies with the container; mount its data directory to the host');
+      ? `not on any mounted volume - it lives in the container layer and is lost if the container is recreated (mounts: ${mounts})`
+      : 'the container has NO volume mounts - all data dies with the container; mount its data directory to the host');
   } else {
     add('Database', 'warn', 'DATABASE_URL not found in .env');
   }
@@ -639,20 +639,20 @@ async function runChecks(cfg, { net = true } = {}) {
       const age = Date.now() - files[0].mtime;
       const stale = age > 7 * 24 * 3600 * 1000;
       add('Backups', stale ? 'warn' : 'ok', `${files.length} item(s), newest ${fmtAge(age)} (${files[0].f})`, stale && cfg.dbPath ? {
-        desc: 'backup is stale — take a snapshot now',
+        desc: 'backup is stale - take a snapshot now',
         apply: async () => backupNow(cfg, { quiet: true }),
       } : undefined);
     }
     if (!cfg.env.KEEL_BACKUP_PASSPHRASE) {
-      add('Backup passphrase', 'info', 'KEEL_BACKUP_PASSPHRASE not set — scheduled encrypted backups would fail');
+      add('Backup passphrase', 'info', 'KEEL_BACKUP_PASSPHRASE not set - scheduled encrypted backups would fail');
     }
   }
 
-  // Alerting — a box that cannot reach you fails silently by construction
+  // Alerting - a box that cannot reach you fails silently by construction
   const chans = loadChannels();
   add('Notifications', chans.length ? 'ok' : 'warn', chans.length
     ? `${chans.length} channel(s): ${[...new Set(chans.map((c) => c.type))].join(', ')}`
-    : 'none — failures will be silent. Set up: bigbox notify add <url>');
+    : 'none - failures will be silent. Set up: bigbox notify add <url>');
 
   // Disk
   const du = diskUsage(cfg.dbPath ? path.dirname(cfg.dbPath) : cfg.dir || os.homedir());
@@ -671,7 +671,7 @@ async function runChecks(cfg, { net = true } = {}) {
   const temps = cpuTemps();
   if (temps.length) {
     const hot = temps.find((t) => t.c >= 80);
-    add('Temperature', hot ? 'warn' : 'info', temps.map((t) => `${t.zone} ${t.c}°C`).join(' · ') + (hot ? ' — check cooling/dust' : ''));
+    add('Temperature', hot ? 'warn' : 'info', temps.map((t) => `${t.zone} ${t.c}°C`).join(' · ') + (hot ? ' - check cooling/dust' : ''));
   }
 
   // Linux: linger, so the user service survives logout
@@ -682,7 +682,7 @@ async function runChecks(cfg, { net = true } = {}) {
         desc: `enable lingering for ${os.userInfo().username}`,
         apply: async () => {
           const r = run('loginctl', ['enable-linger', os.userInfo().username]);
-          return { ok: r.ok, detail: r.ok ? 'enabled' : `${r.err} — run: sudo loginctl enable-linger ${os.userInfo().username}` };
+          return { ok: r.ok, detail: r.ok ? 'enabled' : `${r.err} - run: sudo loginctl enable-linger ${os.userInfo().username}` };
         },
       });
     }
@@ -714,13 +714,13 @@ async function runChecks(cfg, { net = true } = {}) {
   if (net) {
     const gw = defaultGateway();
     if (!gw) {
-      add('Gateway', 'fail', 'no default route — cable/Wi-Fi down or DHCP failed');
+      add('Gateway', 'fail', 'no default route - cable/Wi-Fi down or DHCP failed');
     } else {
       const gwOk = ping(gw);
       add('Gateway', gwOk ? 'ok' : 'fail', `${gw}${gwOk ? '' : ' unreachable'}`);
     }
     const raw = ping('1.1.1.1');
-    add('Internet (IP)', raw ? 'ok' : 'fail', raw ? 'ping 1.1.1.1 OK' : 'cannot reach 1.1.1.1 — WAN/modem/ISP problem');
+    add('Internet (IP)', raw ? 'ok' : 'fail', raw ? 'ping 1.1.1.1 OK' : 'cannot reach 1.1.1.1 - WAN/modem/ISP problem');
     const sys = await systemLookup();
     add('DNS (system)', sys.ok ? 'ok' : 'fail', sys.ok ? `example.com → ${sys.addr} in ${sys.ms}ms` : `system resolver failed (${sys.err})`);
     if (raw) {
@@ -756,18 +756,18 @@ function summarize(checks) {
 async function cmdStatus(cfg) {
   const checks = await runChecks(cfg, { net: true });
   if (flags.json) { console.log(JSON.stringify({ at: new Date().toISOString(), checks }, null, 2)); return summarize(checks).fails ? 2 : 0; }
-  say(`BigBox status — ${os.hostname()} (${process.platform})`);
+  say(`BigBox status - ${os.hostname()} (${process.platform})`);
   renderChecks(checks);
   const { fails, warns } = summarize(checks);
   console.log();
-  if (fails) line(FAIL(), `${fails} problem(s) — run ${bold('bigbox doctor --fix')} to attempt repair`);
-  else if (warns) line(WARN(), `${warns} warning(s) — run ${bold('bigbox doctor')} for details`);
+  if (fails) line(FAIL(), `${fails} problem(s) - run ${bold('bigbox doctor --fix')} to attempt repair`);
+  else if (warns) line(WARN(), `${warns} warning(s) - run ${bold('bigbox doctor')} for details`);
   else line(OK(), 'everything looks healthy');
   return fails ? 2 : warns ? 1 : 0;
 }
 
 async function cmdDoctor(cfg) {
-  say(`BigBox doctor — ${os.hostname()}`);
+  say(`BigBox doctor - ${os.hostname()}`);
   const checks = await runChecks(cfg, { net: true });
   if (flags.json && !flags.fix) { console.log(JSON.stringify({ at: new Date().toISOString(), checks }, null, 2)); return summarize(checks).fails ? 2 : 0; }
   renderChecks(checks);
@@ -775,7 +775,7 @@ async function cmdDoctor(cfg) {
   console.log();
   if (!fixes.length) {
     const { fails, warns } = summarize(checks);
-    if (fails || warns) line(WARN(), 'nothing here is auto-fixable — see details above');
+    if (fails || warns) line(WARN(), 'nothing here is auto-fixable - see details above');
     else line(OK(), 'no problems found');
     return summarize(checks).fails ? 2 : 0;
   }
@@ -785,12 +785,12 @@ async function cmdDoctor(cfg) {
     console.log(`\n  Re-run with ${bold('--fix')} to apply (add ${bold('--dry-run')} to preview).`);
     return 1;
   }
-  say(flags.dryRun ? 'Dry run — would apply:' : 'Applying fixes');
+  say(flags.dryRun ? 'Dry run - would apply:' : 'Applying fixes');
   let applied = 0;
   for (const c of fixes) {
     if (flags.dryRun) { line(dim('→'), `${c.name}: ${c.fix.desc}`); continue; }
     const r = await c.fix.apply();
-    line(r.ok ? OK() : FAIL(), `${c.name}: ${c.fix.desc} — ${r.detail || (r.ok ? 'done' : 'failed')}`);
+    line(r.ok ? OK() : FAIL(), `${c.name}: ${c.fix.desc} - ${r.detail || (r.ok ? 'done' : 'failed')}`);
     if (r.ok) applied++;
   }
   if (!flags.dryRun && applied) {
@@ -824,7 +824,7 @@ async function cmdCtl(cfg, action, target) {
         await new Promise((res) => setTimeout(res, 2000));
         const h = await httpProbe(`http://127.0.0.1:${getPort(cfg)}/api/health`, 3000);
         if (h.up) { line(OK(), `Keel is answering on port ${getPort(cfg)} (${h.ms}ms)`); break; }
-        if (i === 14) { line(WARN(), `service ${action}ed but port ${getPort(cfg)} not answering yet — check: bigbox logs keel`); rc = 1; }
+        if (i === 14) { line(WARN(), `service ${action}ed but port ${getPort(cfg)} not answering yet - check: bigbox logs keel`); rc = 1; }
       }
     }
     if (!r.ok) rc = 2;
@@ -879,11 +879,11 @@ async function cmdLogs(cfg, target) {
         console.log(content.slice(-flags.lines).join('\n'));
         return 0;
       }
-      line(WARN(), 'the scheduled task does not redirect output — check Event Viewer, or run Keel in a terminal (`npm start`) to see live logs');
+      line(WARN(), 'the scheduled task does not redirect output - check Event Viewer, or run Keel in a terminal (`npm start`) to see live logs');
       return 1;
     }
     default:
-      line(FAIL(), 'no Keel service found — is it installed as a service?');
+      line(FAIL(), 'no Keel service found - is it installed as a service?');
       return 1;
   }
 }
@@ -898,7 +898,7 @@ function backupNow(cfg, { quiet = false } = {}) {
   const r = sqliteBackup(cfg.dbPath, path.join(dest, dbName));
   if (!r.ok) { try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* best effort */ } return { ok: false, detail: r.err }; }
   try {
-    // Configuration travels with the snapshot — above all KEEL_BACKUP_PASSPHRASE,
+    // Configuration travels with the snapshot - above all KEEL_BACKUP_PASSPHRASE,
     // without which an encrypted backup cannot be restored at all. A container
     // install has no host .env, so serialise what the container actually has.
     const envDest = path.join(dest, 'keel.env');
@@ -920,7 +920,7 @@ function backupNow(cfg, { quiet = false } = {}) {
   }, null, 2));
   if (!quiet) {
     line(OK(), `snapshot written: ${dest}`);
-    line(dim('·'), `${r.how} · ${fmtBytes(size)} · includes .env copy (keel.env — contains your backup passphrase, keep it private)`);
+    line(dim('·'), `${r.how} · ${fmtBytes(size)} · includes .env copy (keel.env - contains your backup passphrase, keep it private)`);
   }
   return { ok: true, detail: `snapshot ${path.basename(dest)} (${fmtBytes(size)})` };
 }
@@ -973,7 +973,7 @@ async function cmdBackup(cfg, sub) {
           return { f, size, mtime: st.mtimeMs, dir: st.isDirectory() };
         }).sort((a, b) => b.mtime - a.mtime);
       } catch { /* empty */ }
-      if (!items.length) { line(WARN(), 'no backups yet — run: bigbox backup now'); return 1; }
+      if (!items.length) { line(WARN(), 'no backups yet - run: bigbox backup now'); return 1; }
       for (const it of items) line(dim('·'), `${it.f.padEnd(40)} ${fmtBytes(it.size).padStart(9)}  ${fmtAge(Date.now() - it.mtime)}`);
       return 0;
     }
@@ -989,7 +989,7 @@ async function cmdBackup(cfg, sub) {
       try {
         snaps = fs.readdirSync(cfg.backupDir).filter((f) => f.startsWith('keel-snapshot-')).sort().reverse();
       } catch { /* none */ }
-      if (!snaps.length) { line(WARN(), 'no bigbox snapshots found — run: bigbox backup now'); return 1; }
+      if (!snaps.length) { line(WARN(), 'no bigbox snapshots found - run: bigbox backup now'); return 1; }
       const snapDir = path.join(cfg.backupDir, snaps[0]);
       const dbFile = (() => {
         try { return fs.readdirSync(snapDir).find((f) => f.endsWith('.db')); } catch { return null; }
@@ -999,20 +999,20 @@ async function cmdBackup(cfg, sub) {
       const r = sqliteQuery(db, 'PRAGMA integrity_check;');
       if (!r.ok) { line(WARN(), `cannot verify (${r.err})`); return 1; }
       const good = r.out === 'ok';
-      line(good ? OK() : FAIL(), `${snaps[0]}: integrity_check ${good ? 'passed' : `FAILED — ${r.out.split('\n')[0]}`}`);
+      line(good ? OK() : FAIL(), `${snaps[0]}: integrity_check ${good ? 'passed' : `FAILED - ${r.out.split('\n')[0]}`}`);
       return good ? 0 : 2;
     }
     default:
-      line(FAIL(), `unknown backup subcommand '${sub || ''}' — use: now | list | prune | verify`);
+      line(FAIL(), `unknown backup subcommand '${sub || ''}' - use: now | list | prune | verify`);
       return 2;
   }
 }
 
 function cmdPaths(cfg) {
-  say(`BigBox data map — ${os.hostname()}`);
+  say(`BigBox data map - ${os.hostname()}`);
   const row = (k, v, note) => line(dim('·'), `${bold(k.padEnd(18))} ${v ?? dim('(not found)')}${note ? dim(`  ${note}`) : ''}`);
   row('Keel install', cfg.dir || (cfg.container ? `container ${cfg.container} (no host install)` : null));
-  row('Config (.env)', cfg.dir ? path.join(cfg.dir, '.env') : (cfg.container ? `container environment — bigbox env` : null),
+  row('Config (.env)', cfg.dir ? path.join(cfg.dir, '.env') : (cfg.container ? `container environment - bigbox env` : null),
     'backup passphrase, OAuth secrets');
   if (cfg.isPostgres) row('Database', 'Postgres (see DATABASE_URL)', 'data lives in the DB server');
   else row('Database', cfg.dbPath, cfg.dbPath && fs.existsSync(cfg.dbPath) ? fmtBytes(fs.statSync(cfg.dbPath).size) : '');
@@ -1047,13 +1047,13 @@ async function runNetLadder(cfg) {
   const step = (name, ok, detail) => { steps.push({ name, ok, detail }); return ok; };
 
   const gw = defaultGateway();
-  step('1. Default route', !!gw, gw ? `gateway is ${gw}` : 'none — network cable/Wi-Fi down, or DHCP gave no lease');
+  step('1. Default route', !!gw, gw ? `gateway is ${gw}` : 'none - network cable/Wi-Fi down, or DHCP gave no lease');
 
   const gwOk = gw ? ping(gw) : false;
-  if (gw) step('2. Router reachable', gwOk, gwOk ? `${gw} answers ping` : `${gw} does not answer — router down or local link broken`);
+  if (gw) step('2. Router reachable', gwOk, gwOk ? `${gw} answers ping` : `${gw} does not answer - router down or local link broken`);
 
   const rawOk = ping('1.1.1.1');
-  step('3. Internet (no DNS)', rawOk, rawOk ? 'ping 1.1.1.1 OK — the WAN link works' : 'cannot reach 1.1.1.1 — modem/ISP outage (DNS is not the problem)');
+  step('3. Internet (no DNS)', rawOk, rawOk ? 'ping 1.1.1.1 OK - the WAN link works' : 'cannot reach 1.1.1.1 - modem/ISP outage (DNS is not the problem)');
 
   let phOk = null;
   if (ph.type !== 'none') {
@@ -1067,19 +1067,19 @@ async function runNetLadder(cfg) {
   step(ph.type !== 'none' ? '5. DNS upstream (1.1.1.1)' : '4. DNS (1.1.1.1)', up.ok, up.ok ? `resolved in ${up.ms}ms` : `upstream DNS failed (${up.err})`);
 
   const sys = await systemLookup();
-  step('6. System resolver', sys.ok, sys.ok ? `example.com → ${sys.addr} (servers: ${systemDnsServers().slice(0, 3).join(', ')})` : `failed (${sys.err}) — check /etc/resolv.conf or DHCP DNS settings`);
+  step('6. System resolver', sys.ok, sys.ok ? `example.com → ${sys.addr} (servers: ${systemDnsServers().slice(0, 3).join(', ')})` : `failed (${sys.err}) - check /etc/resolv.conf or DHCP DNS settings`);
 
   const web = await httpProbe('https://www.google.com', 8000);
   step('7. HTTPS end-to-end', web.up, web.up ? `TLS handshake + fetch OK in ${web.ms}ms` : `failed (${web.err})`);
 
   const port = getPort(cfg);
   const keel = await httpProbe(`http://127.0.0.1:${port}/api/health`, 4000);
-  step('8. Keel (local)', keel.up, keel.up ? `port ${port} answering` : `port ${port} not answering — bigbox restart keel`);
+  step('8. Keel (local)', keel.up, keel.up ? `port ${port} answering` : `port ${port} not answering - bigbox restart keel`);
 
   const firstFailure = steps.find((s) => !s.ok)?.name ?? null;
   let diagnosis;
   if (!firstFailure) {
-    diagnosis = { level: 'ok', text: "every layer works — if a device on your network still has trouble, it is that device's DNS/network settings, not BigBox" };
+    diagnosis = { level: 'ok', text: "every layer works - if a device on your network still has trouble, it is that device's DNS/network settings, not BigBox" };
   } else if (firstFailure.startsWith('1.') || firstFailure.startsWith('2.')) {
     diagnosis = { level: 'fail', title: 'Local network problem.', text: 'Check the cable/Wi-Fi and the router. Nothing on BigBox can fix this.' };
   } else if (firstFailure.startsWith('3.')) {
@@ -1091,7 +1091,7 @@ async function runNetLadder(cfg) {
   } else if (!sys.ok) {
     diagnosis = { level: 'fail', title: 'The system resolver is misconfigured', text: 'point it at Pi-hole (127.0.0.1) or a public resolver.' };
   } else if (!web.up) {
-    diagnosis = { level: 'warn', text: 'DNS works but HTTPS fails — captive portal, firewall, or TLS interception in the path.' };
+    diagnosis = { level: 'warn', text: 'DNS works but HTTPS fails - captive portal, firewall, or TLS interception in the path.' };
   } else if (!keel.up) {
     diagnosis = { level: 'warn', text: 'The internet is fine; only Keel is down. Restart Keel, then check its logs if it does not come back.' };
   } else {
@@ -1106,7 +1106,7 @@ async function cmdNet(cfg) {
     console.log(JSON.stringify({ at: new Date().toISOString(), steps, diagnosis }, null, 2));
     return diagnosis.level === 'ok' ? 0 : 2;
   }
-  say('Internet troubleshooting — walking the stack from the wire up');
+  say('Internet troubleshooting - walking the stack from the wire up');
   const { steps, diagnosis, ph } = await runNetLadder(cfg);
   for (const s of steps) line(s.ok ? OK() : FAIL(), `${bold(s.name.padEnd(22))} ${s.detail}`);
   console.log();
@@ -1121,7 +1121,7 @@ async function cmdNet(cfg) {
       if (r.ok) {
         await new Promise((res) => setTimeout(res, 3000));
         const again = await resolveVia('127.0.0.1');
-        line(again.ok ? OK() : FAIL(), again.ok ? 'Pi-hole is answering again' : 'still down — try: bigbox logs pihole');
+        line(again.ok ? OK() : FAIL(), again.ok ? 'Pi-hole is answering again' : 'still down - try: bigbox logs pihole');
       }
     } else {
       line(dim('→'), `run ${bold('bigbox net --fix')} (or ${bold('bigbox restart dns')}) to restart it`);
@@ -1150,7 +1150,7 @@ async function cmdUpdate(cfg) {
   const git = (args) => run('git', ['-C', cfg.dir, ...args], { timeout: 120000 });
   const dirty = git(['status', '--porcelain']).out;
   if (dirty && !flags.yes) {
-    line(FAIL(), 'the install directory has local changes — re-run with --yes to update anyway (git stash is applied first)');
+    line(FAIL(), 'the install directory has local changes - re-run with --yes to update anyway (git stash is applied first)');
     return 2;
   }
   if (dirty) { git(['stash', 'push', '-m', `bigbox-update-${ts()}`]); line(WARN(), 'local changes stashed (git stash list to recover)'); }
@@ -1181,7 +1181,7 @@ async function cmdUpdate(cfg) {
         const h = await httpProbe(`http://127.0.0.1:${getPort(cfg)}/api/health`, 3000);
         if (h.up) { line(OK(), 'Keel is back up'); return 0; }
       }
-      line(WARN(), 'restarted but not answering yet — check: bigbox logs keel');
+      line(WARN(), 'restarted but not answering yet - check: bigbox logs keel');
       return 1;
     }
     return 2;
@@ -1205,7 +1205,7 @@ async function cmdReport(cfg) {
   else if (cfg.logPath && fs.existsSync(cfg.logPath)) logTail = fs.readFileSync(cfg.logPath, 'utf8').split(/\r?\n/).slice(-60).join('\n');
 
   const md = [
-    `# BigBox report — ${os.hostname()} — ${new Date().toISOString()}`,
+    `# BigBox report - ${os.hostname()} - ${new Date().toISOString()}`,
     '',
     '## System',
     `- Platform: ${process.platform} ${os.release()} (${os.arch()})`,
@@ -1234,14 +1234,14 @@ async function cmdReport(cfg) {
   const out = path.join(cfg.backupDir && fs.existsSync(cfg.backupDir) ? cfg.backupDir : process.cwd(), `bigbox-report-${ts()}.md`);
   fs.writeFileSync(out, md);
   line(OK(), `report written: ${out}`);
-  line(dim('·'), 'safe to share — passphrases, secrets and DATABASE_URL are redacted (skim the log tail before posting publicly)');
+  line(dim('·'), 'safe to share - passphrases, secrets and DATABASE_URL are redacted (skim the log tail before posting publicly)');
   return 0;
 }
 
 // ------------------------------------------------------------ notify ------
 // Alert channels. The watchdog has been able to fix things for a while; this
 // is what finally lets it TELL someone. Channels live in ~/.bigbox/notify.json
-// (mode 600 — the URLs carry tokens), alert state in ~/.bigbox/state.json so
+// (mode 600 - the URLs carry tokens), alert state in ~/.bigbox/state.json so
 // an ongoing failure alerts once, reminds every six hours, and announces its
 // own recovery instead of paging every five minutes forever.
 
@@ -1333,7 +1333,7 @@ async function reconcileAlerts(events) {
       await sendNotification(`BigBox: ${key} problem`, msg, { ok: false });
     } else if (now - a.lastSent > RESEND_MS) {
       a.lastSent = now;
-      await sendNotification(`BigBox: ${key} still failing`, `${msg} — since ${new Date(a.since).toISOString().replace('T', ' ').slice(0, 16)}`, { ok: false });
+      await sendNotification(`BigBox: ${key} still failing`, `${msg} - since ${new Date(a.since).toISOString().replace('T', ' ').slice(0, 16)}`, { ok: false });
     }
   }
   for (const key of Object.keys(st.alerts)) {
@@ -1357,9 +1357,9 @@ async function maybeDailyDigest(cfg) {
   const bad = checks
     .filter((c) => c.level === 'fail' || c.level === 'warn')
     .map((c) => `${c.level === 'fail' ? '✗' : '!'} ${c.name}: ${c.detail}`);
-  const title = fails ? `BigBox daily — ${fails} problem(s)`
-    : warns ? `BigBox daily — ok, ${warns} warning(s)`
-      : 'BigBox daily — all clear';
+  const title = fails ? `BigBox daily - ${fails} problem(s)`
+    : warns ? `BigBox daily - ok, ${warns} warning(s)`
+      : 'BigBox daily - all clear';
   await sendNotification(title, bad.length ? bad.slice(0, 8).join('\n') : `all ${checks.length} checks healthy`, { ok: !fails });
   st.lastDigest = today;
   writeJson600(STATE_FILE(), st);
@@ -1373,7 +1373,7 @@ async function cmdNotify(sub, args) {
   if (!sub || sub === 'list' || sub === 'show') {
     say('Notification channels');
     if (!channels.length) {
-      line(WARN(), 'none configured — failures are only visible in logs');
+      line(WARN(), 'none configured - failures are only visible in logs');
       line(dim('→'), 'add one: bigbox notify add https://ntfy.sh/your-topic');
       return 1;
     }
@@ -1388,7 +1388,7 @@ async function cmdNotify(sub, args) {
     const url = b || a;
     if (!url || !/^https?:\/\//.test(url)) {
       line(FAIL(), 'usage: bigbox notify add [ntfy|gotify|kuma|webhook] <https url>');
-      line(dim('·'), 'ntfy:    https://ntfy.sh/<your-topic>            (easiest — pick a hard-to-guess topic)');
+      line(dim('·'), 'ntfy:    https://ntfy.sh/<your-topic>            (easiest - pick a hard-to-guess topic)');
       line(dim('·'), 'gotify:  https://gotify.example/message?token=…');
       line(dim('·'), 'kuma:    the push-monitor URL, …/api/push/<key>');
       line(dim('·'), 'webhook: any https endpoint that accepts JSON');
@@ -1398,11 +1398,11 @@ async function cmdNotify(sub, args) {
     if (channels.some((c) => c.url === url)) { line(OK(), 'already configured'); return 0; }
     const ch = { type, url };
     say(`Adding ${type} channel`);
-    // Prove it delivers BEFORE saving — a channel that never worked is worse
+    // Prove it delivers BEFORE saving - a channel that never worked is worse
     // than none, because it feels like coverage.
-    const r = await postChannel(ch, { title: 'BigBox test', message: `notifications configured on ${os.hostname()} — this channel will receive alerts`, ok: true });
+    const r = await postChannel(ch, { title: 'BigBox test', message: `notifications configured on ${os.hostname()} - this channel will receive alerts`, ok: true });
     line(r.ok ? OK() : FAIL(), r.ok ? `test message delivered (${r.detail})` : `test failed: ${r.detail}`);
-    if (!r.ok && !flags.yes) { line(dim('→'), 'not saved — fix the URL, or re-run with --yes to save anyway'); return 2; }
+    if (!r.ok && !flags.yes) { line(dim('→'), 'not saved - fix the URL, or re-run with --yes to save anyway'); return 2; }
     channels.push(ch); save(channels);
     line(OK(), `saved (${NOTIFY_FILE()}, mode 600)`);
     return 0;
@@ -1417,8 +1417,8 @@ async function cmdNotify(sub, args) {
   }
 
   if (sub === 'test' || sub === 'send') {
-    if (!channels.length) { line(FAIL(), 'no channels configured — bigbox notify add <url>'); return 2; }
-    const msg = sub === 'send' ? args.join(' ') : `test from ${os.hostname()} — if you can read this, alerts work`;
+    if (!channels.length) { line(FAIL(), 'no channels configured - bigbox notify add <url>'); return 2; }
+    const msg = sub === 'send' ? args.join(' ') : `test from ${os.hostname()} - if you can read this, alerts work`;
     if (!msg) { line(FAIL(), 'usage: bigbox notify send <message>'); return 2; }
     say(sub === 'test' ? 'Sending a test to every channel' : 'Sending');
     const results = await sendNotification(sub === 'test' ? 'BigBox test' : `BigBox @ ${os.hostname()}`, msg, { ok: true });
@@ -1426,12 +1426,12 @@ async function cmdNotify(sub, args) {
     return results.every((r) => r.ok) ? 0 : 2;
   }
 
-  line(FAIL(), `unknown notify subcommand '${sub}' — use: list | add | remove | test | send`);
+  line(FAIL(), `unknown notify subcommand '${sub}' - use: list | add | remove | test | send`);
   return 2;
 }
 
 async function cmdDigest(cfg) {
-  if (!loadChannels().length) { line(FAIL(), 'no notification channels — add one first: bigbox notify add <url>'); return 2; }
+  if (!loadChannels().length) { line(FAIL(), 'no notification channels - add one first: bigbox notify add <url>'); return 2; }
   const st = readJson(STATE_FILE(), {});
   delete st.lastDigest; // force: the command means "send it now"
   writeJson600(STATE_FILE(), st);
@@ -1463,7 +1463,7 @@ async function watchOnce(cfg, logFile, { act = true } = {}) {
       const r = keelCtl(svc, 'restart');
       msg += ` → restart: ${r.ok ? 'ok' : r.detail}`;
     } else if (svc.type === 'none') {
-      msg += ' — no service manager to restart it';
+      msg += ' - no service manager to restart it';
     }
     events.keel = msg; notes.push(msg);
   }
@@ -1553,14 +1553,14 @@ async function cmdWatch(cfg) {
   // Foreground loop
   const logFile = watchLogPath(cfg);
   const channels = loadChannels();
-  say(`BigBox watchdog — every ${flags.interval}s${flags.fix ? ', self-remediating' : ' (observe only — add --fix to remediate)'} · log: ${logFile}`);
+  say(`BigBox watchdog - every ${flags.interval}s${flags.fix ? ', self-remediating' : ' (observe only - add --fix to remediate)'} · log: ${logFile}`);
   line(channels.length ? OK() : WARN(), channels.length
     ? `alerts go to ${channels.length} channel(s): ${[...new Set(channels.map((c) => c.type))].join(', ')}`
-    : 'no notification channels — failures will only reach this log. Add one: bigbox notify add <url>');
+    : 'no notification channels - failures will only reach this log. Add one: bigbox notify add <url>');
   for (;;) {
     const result = await watchOnce(cfg, logFile, { act: flags.fix });
     try { await maybeDailyDigest(cfg); } catch { /* digest is best-effort */ }
-    line(result.notes.length ? WARN() : OK(), `${result.stamp} — ${result.notes.length ? result.notes.join(' | ') : 'all healthy'}`);
+    line(result.notes.length ? WARN() : OK(), `${result.stamp} - ${result.notes.length ? result.notes.join(' | ') : 'all healthy'}`);
     await new Promise((r) => setTimeout(r, flags.interval * 1000));
   }
 }
@@ -1574,7 +1574,7 @@ function shq(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
  * `node /dev/stdin` looks tempting and cannot work: when stdin is a pipe,
  * Node's module loader resolves /dev/stdin to /proc/<pid>/fd/pipe:[inode] and
  * fails with ENOENT. So land the script in a temp file first, run that, and
- * remove it — preserving the script's exit code, which carries health status.
+ * remove it - preserving the script's exit code, which carries health status.
  */
 function remoteCommand(cliArgs) {
   return 'f="${TMPDIR:-/tmp}/.bigbox-$$.mjs"; cat > "$f" && node "$f" '
@@ -1585,14 +1585,14 @@ function remoteCommand(cliArgs) {
 /**
  * Reuse one SSH connection across calls (ControlMaster), so a GUI polling
  * every 15s pays the handshake once. Windows' OpenSSH has no multiplexing.
- * batch=true refuses password prompts — right for the GUI, which has no
+ * batch=true refuses password prompts - right for the GUI, which has no
  * terminal to prompt on; the CLI leaves them interactive.
  */
 /**
  * Where the multiplexed connection's socket lives, or null to skip
  * multiplexing.
  *
- * A Unix socket path must fit in sockaddr_un — 104 bytes on macOS — and while
+ * A Unix socket path must fit in sockaddr_un - 104 bytes on macOS - and while
  * setting the master up, SSH appends its own ~17-character random suffix. The
  * obvious ControlPath=$TMPDIR/...-%C blows that budget on macOS, where TMPDIR
  * is a long /var/folders/… path and %C is a 40-char hash. So: a short home
@@ -1767,7 +1767,7 @@ function applyEnv(target) {
 
 async function cmdEnv(cfg, sub, args) {
   const target = envTarget(cfg);
-  if (target.kind === 'none') { line(FAIL(), 'no Keel install found — pass --dir'); return 2; }
+  if (target.kind === 'none') { line(FAIL(), 'no Keel install found - pass --dir'); return 2; }
   if (target.kind === 'docker-plain') {
     line(FAIL(), `container ${target.container} was not created by docker compose`);
     line(dim('·'), 'recreate it with `docker run -e KEY=VALUE …`, or move the stack to compose');
@@ -1777,7 +1777,7 @@ async function cmdEnv(cfg, sub, args) {
   if (sub === 'path') { console.log(target.file); return 0; }
 
   if (!sub || sub === 'show' || sub === 'list') {
-    say(`Environment for Keel — ${target.kind === 'compose' ? `compose service “${target.service}”` : 'local install'}`);
+    say(`Environment for Keel - ${target.kind === 'compose' ? `compose service “${target.service}”` : 'local install'}`);
     line(dim('·'), `file: ${target.file}${fs.existsSync(target.file) ? '' : dim(' (not created yet)')}`);
     if (target.kind === 'compose') line(dim('·'), `compose: ${target.composeFile}`);
     console.log();
@@ -1807,7 +1807,7 @@ async function cmdEnv(cfg, sub, args) {
   }
 
   if (sub !== 'set' && sub !== 'unset') {
-    line(FAIL(), `unknown env subcommand '${sub}' — use: show | set | unset | path`);
+    line(FAIL(), `unknown env subcommand '${sub}' - use: show | set | unset | path`);
     return 2;
   }
 
@@ -1834,13 +1834,13 @@ async function cmdEnv(cfg, sub, args) {
     catch (e) { line(FAIL(), String(e.message)); return 2; }
   }
 
-  if (!changed.length) { line(OK(), 'already exactly as requested — nothing to do'); return 0; }
+  if (!changed.length) { line(OK(), 'already exactly as requested - nothing to do'); return 0; }
   for (const c of changed) {
     const val = c.to === null ? dim('(removed)') : SECRET_KEY.test(c.k) ? dim('<hidden>') : c.to;
     line(dim('·'), `${bold(c.k)} ${c.from === null ? 'added' : 'updated'} → ${val}`);
   }
 
-  if (flags.dryRun) { line(WARN(), 'dry run — nothing written'); return 0; }
+  if (flags.dryRun) { line(WARN(), 'dry run - nothing written'); return 0; }
 
   try {
     fs.mkdirSync(path.dirname(target.file), { recursive: true });
@@ -1848,7 +1848,7 @@ async function cmdEnv(cfg, sub, args) {
     if (!IS_WIN) fs.chmodSync(target.file, 0o600); // these are secrets
   } catch (e) {
     line(FAIL(), `cannot write ${target.file}: ${e.message}`);
-    if (e.code === 'EACCES') line(dim('·'), `that directory is root-owned — re-run with sudo, or: sudo chown ${os.userInfo().username} ${path.dirname(target.file)}`);
+    if (e.code === 'EACCES') line(dim('·'), `that directory is root-owned - re-run with sudo, or: sudo chown ${os.userInfo().username} ${path.dirname(target.file)}`);
     return 2;
   }
   line(OK(), `wrote ${target.file} (mode 600)`);
@@ -1870,7 +1870,7 @@ async function cmdEnv(cfg, sub, args) {
     const live = run('docker', ['exec', target.container, 'env']).out;
     for (const [k] of pairs) {
       const present = new RegExp(`^${k}=`, 'm').test(live);
-      if (sub === 'set') line(present ? OK() : WARN(), `${k} ${present ? 'is live in the container' : 'is NOT visible in the container — check the compose file'}`);
+      if (sub === 'set') line(present ? OK() : WARN(), `${k} ${present ? 'is live in the container' : 'is NOT visible in the container - check the compose file'}`);
       else line(present ? WARN() : OK(), `${k} ${present ? 'is still set (defined elsewhere in compose?)' : 'is gone'}`);
     }
   }
@@ -1878,8 +1878,8 @@ async function cmdEnv(cfg, sub, args) {
 }
 
 // ------------------------------------------------------------------- gui ---
-// A local web UI. The server shells out to this very script for every panel —
-// locally, or over SSH when --host is set — so the GUI can never drift from
+// A local web UI. The server shells out to this very script for every panel -
+// locally, or over SSH when --host is set - so the GUI can never drift from
 // what the CLI reports, and a Mac can drive a headless box with no agent
 // installed on it.
 
@@ -1906,13 +1906,13 @@ function briefError(r) {
   const first = raw.split('\n').map((s) => s.trim()).filter(Boolean)[0] || `no output (exit ${r.code})`;
   let hint = '';
   if (/permission denied|publickey|authentication failed/i.test(raw)) {
-    hint = ` — SSH could not authenticate. Check your key works: ssh ${flags.host}`;
+    hint = ` - SSH could not authenticate. Check your key works: ssh ${flags.host}`;
   } else if (/node: (command )?not found|not found: node/i.test(raw)) {
-    hint = ' — Node 20+ is not installed on that machine';
+    hint = ' - Node 20+ is not installed on that machine';
   } else if (/could not resolve hostname|connection (refused|timed out)|no route to host/i.test(raw)) {
-    hint = ' — cannot reach that host';
+    hint = ' - cannot reach that host';
   } else if (/host key verification failed/i.test(raw)) {
-    hint = ` — unknown host key. Connect once manually first: ssh ${flags.host}`;
+    hint = ` - unknown host key. Connect once manually first: ssh ${flags.host}`;
   }
   return first.slice(0, 300) + hint;
 }
@@ -1920,7 +1920,7 @@ function briefError(r) {
 function cliJson(args) {
   const r = cliRun(args);
   // Exit codes carry health (1 = warnings, 2 = problems), so a non-zero exit
-  // is expected here — only unparseable output is an actual error.
+  // is expected here - only unparseable output is an actual error.
   try {
     return { ok: true, data: JSON.parse(r.out) };
   } catch {
@@ -1991,7 +1991,7 @@ async function cmdGui() {
       || req.headers['x-bigbox-token']
       || (req.headers.cookie || '').match(/bigbox-token=([a-f0-9]+)/)?.[1];
     if (supplied !== token) {
-      return send(res, 401, 'Unauthorized — open the URL printed in the terminal.', 'text/plain; charset=utf-8');
+      return send(res, 401, 'Unauthorized - open the URL printed in the terminal.', 'text/plain; charset=utf-8');
     }
 
     try {
@@ -2056,12 +2056,12 @@ async function cmdGui() {
     });
   } catch (e) {
     if (e?.code === 'EADDRINUSE') {
-      line(FAIL(), `port ${port} is already in use — another ${bold('bigbox gui')} is probably running.`);
+      line(FAIL(), `port ${port} is already in use - another ${bold('bigbox gui')} is probably running.`);
       line(dim('·'), `Use its window, stop it with Ctrl+C, or start this one on another port: ${bold(`bigbox gui --gui-port ${port + 1}`)}`);
       return 2;
     }
     if (e?.code === 'EADDRNOTAVAIL') {
-      line(FAIL(), `cannot listen on ${bind} — no interface on this machine has that address`);
+      line(FAIL(), `cannot listen on ${bind} - no interface on this machine has that address`);
       return 2;
     }
     throw e;
@@ -2069,10 +2069,10 @@ async function cmdGui() {
 
   const shown = bind === '127.0.0.1' ? '127.0.0.1' : bind;
   const link = `http://${shown}:${port}/?t=${token}`;
-  say(`BigBox GUI — managing ${bold(label)}${flags.host ? dim(' (over SSH)') : ''}`);
+  say(`BigBox GUI - managing ${bold(label)}${flags.host ? dim(' (over SSH)') : ''}`);
   line(OK(), `open ${bold(link)}`);
   if (bind !== '127.0.0.1') {
-    line(WARN(), `bound to ${bind} — anyone who can reach that address and the token can restart services`);
+    line(WARN(), `bound to ${bind} - anyone who can reach that address and the token can restart services`);
   }
   line(dim('·'), 'Ctrl+C to stop.');
   if (!flags.noOpen) openBrowser(link);
@@ -2080,7 +2080,7 @@ async function cmdGui() {
   return 0;
 }
 
-/** The GUI's session token — this guards service restarts, so: real CSPRNG. */
+/** The GUI's session token - this guards service restarts, so: real CSPRNG. */
 function randomToken() {
   return randomBytes(24).toString('hex');
 }
@@ -2097,7 +2097,7 @@ function installMacApp() {
   const args = [flags.host ? `--host ${flags.host}` : '', flags.dir ? `--dir ${flags.dir}` : '']
     .filter(Boolean).join(' ');
   const launcher = `#!/bin/sh
-# Generated by bigbox — re-run \`bigbox gui --install-app\` to refresh.
+# Generated by bigbox - re-run \`bigbox gui --install-app\` to refresh.
 exec "${process.execPath}" "${SELF}" gui ${args}
 `;
   fs.writeFileSync(path.join(macos, 'BigBox'), launcher, { mode: 0o755 });
@@ -2121,7 +2121,7 @@ exec "${process.execPath}" "${SELF}" gui ${args}
 
   const icon = buildAppIcon(resources);
   line(OK(), `installed ${appDir}`);
-  line(dim('·'), icon ? 'icon generated' : 'no icon (needs sips + iconutil) — the app still works');
+  line(dim('·'), icon ? 'icon generated' : 'no icon (needs sips + iconutil) - the app still works');
   line(dim('·'), 'find it in Finder → Applications, or Spotlight "BigBox". Drag it to the Dock to keep it.');
   return 0;
 }
@@ -2153,7 +2153,7 @@ function buildAppIcon(resources) {
   }
 }
 
-/** A minimal PNG encoder — rounded gradient tile with a white box glyph. */
+/** A minimal PNG encoder - rounded gradient tile with a white box glyph. */
 function makeIconPng(size) {
   const zlib = createRequire(import.meta.url)('node:zlib');
   const px = Buffer.alloc(size * size * 4);
@@ -2227,7 +2227,7 @@ function guiHtml(label, mode) {
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BigBox — ${escapeHtml(label)}</title>
+<title>BigBox - ${escapeHtml(label)}</title>
 <style>
   :root {
     --bg:#0f1115; --panel:#161a22; --elev:#1c212b; --border:#262d3a;
@@ -2407,7 +2407,7 @@ function guiHtml(label, mode) {
     var warns = checks.filter(function (c) { return c.level === 'warn'; }).length;
     var b = $('banner');
     b.className = 'banner ' + (fails ? 'fail' : warns ? 'warn' : 'ok');
-    b.textContent = fails ? (fails + ' problem' + (fails > 1 ? 's' : '') + ' — try “Run doctor --fix”')
+    b.textContent = fails ? (fails + ' problem' + (fails > 1 ? 's' : '') + ' - try “Run doctor --fix”')
       : warns ? (warns + ' warning' + (warns > 1 ? 's' : ''))
       : 'Everything looks healthy';
     $('checks').innerHTML = '';
@@ -2512,7 +2512,7 @@ function escapeHtml(s) {
 
 // ----------------------------------------------------------------- help ---
 function help() {
-  console.log(`${bold('bigbox')} ${VERSION} — troubleshoot and manage your BigBox (Keel + Pi-hole)
+  console.log(`${bold('bigbox')} ${VERSION} - troubleshoot and manage your BigBox (Keel + Pi-hole)
 
 ${bold('Usage:')} bigbox <command> [options]
 
@@ -2547,14 +2547,14 @@ ${bold('Care & feeding')}
 ${bold('Options')}
   --dir PATH        Keel install directory (default: auto-detect, or $KEEL_DIR)
   --port N          Keel's HTTP port (default: .env PORT, docker's published port, or 3000)
-  --host USER@HOST  run any command on the box over SSH (needs Node there — Keel guarantees it)
+  --host USER@HOST  run any command on the box over SSH (needs Node there - Keel guarantees it)
   --json            machine-readable output for status/doctor/net
   --interval N      watchdog period in seconds (default 300)
   --no-color, -y/--yes, -V/--version, -h/--help
 
 ${bold('GUI options')}
   --gui-port N      port for the dashboard        (default 7717)
-  --bind ADDR       listen address                (default 127.0.0.1 — see the README before changing)
+  --bind ADDR       listen address                (default 127.0.0.1 - see the README before changing)
   --no-open         don't launch a browser
   --install-app     macOS: install ~/Applications/BigBox.app that opens the GUI
 
@@ -2586,7 +2586,7 @@ ${bold('Examples')}
     case 'doctor': rc = await cmdDoctor(cfg); break;
     case 'start': case 'stop': case 'restart': {
       const target = words[1] || 'keel';
-      if (!['keel', 'pihole', 'dns', 'all'].includes(target)) { line(FAIL(), `unknown target '${target}' — use keel | pihole | dns | all`); rc = 2; break; }
+      if (!['keel', 'pihole', 'dns', 'all'].includes(target)) { line(FAIL(), `unknown target '${target}' - use keel | pihole | dns | all`); rc = 2; break; }
       rc = await cmdCtl(cfg, cmd, target);
       break;
     }
