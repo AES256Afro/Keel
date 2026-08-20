@@ -27,11 +27,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import dns from 'node:dns';
+import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash, randomBytes } from 'node:crypto';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
 const IS_LINUX = process.platform === 'linux';
@@ -400,6 +401,249 @@ function piholeCtl(ph, action) { // start | stop | restart | restartdns
   return { ok: false, detail: 'Pi-hole not found on this machine' };
 }
 
+// ------------------------------------------------------------- stacks -----
+// The box is a fleet of compose projects, not one app. Compose stamps every
+// container with its project, service and config file, so discovery is free -
+// and health checks, alerts and per-stack verbs can be generic instead of
+// hardcoded to Keel.
+
+const SEP1 = '\u0001';
+
+function parsePortsField(raw) {
+  // "127.0.0.1:3080->3000/tcp, [::]:80->80/tcp, 5353/udp"
+  const out = [];
+  for (const part of (raw || '').split(',').map((x) => x.trim()).filter(Boolean)) {
+    const m = part.match(/^(.+):(\d+)->(\d+)\/(tcp|udp)$/);
+    if (!m) continue; // unpublished container port
+    out.push({ bind: m[1].replace(/^\[|\]$/g, ''), host: +m[2], container: +m[3], proto: m[4] });
+  }
+  return out;
+}
+
+function bindScope(bind) {
+  if (bind.startsWith('127.') || bind === '::1' || bind === 'localhost') return 'loopback';
+  if (bind === '0.0.0.0' || bind === '::') return 'world';
+  const cg = bind.match(/^100\.(\d+)\./);
+  if (cg && +cg[1] >= 64 && +cg[1] <= 127) return 'tailnet';
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(bind)) return 'lan';
+  return bind;
+}
+
+function discoverStacks() {
+  if (!have('docker')) return { stacks: [], containers: [] };
+  const fmt = ['{{.Names}}', '{{.Label "com.docker.compose.project"}}', '{{.Label "com.docker.compose.service"}}',
+    '{{.Label "com.docker.compose.project.working_dir"}}', '{{.Label "com.docker.compose.project.config_files"}}',
+    '{{.State}}', '{{.Status}}', '{{.Image}}', '{{.Ports}}'].join(SEP1);
+  const r = run('docker', ['ps', '-a', '--no-trunc', '--format', fmt]);
+  if (!r.ok) return { stacks: [], containers: [] };
+  const containers = r.out.split('\n').filter(Boolean).map((l) => {
+    const [name, project, service, workdir, configFiles, state, status, image, ports] = l.split(SEP1);
+    const firstCfg = (configFiles || '').split(',')[0];
+    return {
+      name, project: project || null, service: service || name, workdir: workdir || null,
+      composeFile: firstCfg ? (path.isAbsolute(firstCfg) ? firstCfg : (workdir ? path.join(workdir, firstCfg) : null)) : null,
+      state, status, image,
+      health: /\(healthy\)/.test(status) ? 'healthy'
+        : /\(unhealthy\)/.test(status) ? 'unhealthy'
+          : /health: starting/.test(status) ? 'starting' : null,
+      ports: parsePortsField(ports),
+    };
+  });
+  // One inspect for the whole fleet: restart counts, policies, mount counts.
+  if (containers.length) {
+    const ins = run('docker', ['inspect', '-f',
+      `{{.Name}}${SEP1}{{.RestartCount}}${SEP1}{{.HostConfig.RestartPolicy.Name}}${SEP1}{{len .Mounts}}`,
+      ...containers.map((c) => c.name)]);
+    for (const l of ins.out.split('\n').filter(Boolean)) {
+      const [n, rc, pol, mounts] = l.split(SEP1);
+      const c = containers.find((x) => n === '/' + x.name || n === x.name);
+      if (c) { c.restarts = +rc || 0; c.restartPolicy = pol || 'no'; c.mounts = +mounts || 0; }
+    }
+  }
+  const byProject = new Map();
+  for (const c of containers) {
+    const key = c.project || '(standalone)';
+    if (!byProject.has(key)) byProject.set(key, { project: key, workdir: null, composeFile: null, containers: [] });
+    const st = byProject.get(key);
+    st.workdir = st.workdir || c.workdir;
+    st.composeFile = st.composeFile || c.composeFile;
+    st.containers.push(c);
+  }
+  return { stacks: [...byProject.values()].sort((a, b) => a.project.localeCompare(b.project)), containers };
+}
+
+function tcpProbe(port, host = '127.0.0.1', timeout = 1500) {
+  return new Promise((resolve) => {
+    const sock = net.connect({ port, host });
+    const done = (up) => { sock.destroy(); resolve(up); };
+    sock.setTimeout(timeout, () => done(false));
+    sock.on('connect', () => done(true));
+    sock.on('error', () => done(false));
+  });
+}
+
+/**
+ * The generalised version of the bug this box actually had: a container
+ * reporting unhealthy while the app answers fine, because the healthcheck
+ * probes a loopback the app never bound. If the published host port accepts
+ * connections, the healthcheck is lying - restarting the container would be
+ * treating a working service as an outage.
+ */
+async function annotateHealthcheckLies(containers) {
+  for (const c of containers) {
+    if (c.health !== 'unhealthy' || c.state !== 'running') continue;
+    const p = c.ports.find((x) => x.proto === 'tcp');
+    if (!p) continue;
+    const host = bindScope(p.bind) === 'loopback' ? '127.0.0.1' : (p.bind === '0.0.0.0' || p.bind === '::') ? '127.0.0.1' : p.bind;
+    c.lie = await tcpProbe(p.host, host);
+  }
+}
+
+function containerTrouble(c) {
+  if (c.state === 'restarting') return { level: 'fail', note: `restart loop (${c.restarts ?? '?'} restarts)` };
+  if (c.health === 'unhealthy' && c.lie) return { level: 'warn', note: 'reports unhealthy but its host port answers - the healthcheck is misconfigured, not the app' };
+  if (c.health === 'unhealthy') return { level: 'fail', note: 'unhealthy' };
+  if (c.state === 'exited' && ['always', 'unless-stopped'].includes(c.restartPolicy)) {
+    return { level: 'fail', note: `exited despite restart policy "${c.restartPolicy}"` };
+  }
+  if (c.state === 'running' && c.mounts === 0) return { level: 'warn', note: 'no volumes - anything it writes dies with the container' };
+  return { level: 'ok', note: null };
+}
+
+function fmtPorts(c) {
+  if (!c.ports.length) return dim('no published ports');
+  return c.ports.map((p) => {
+    const scope = bindScope(p.bind);
+    const label = `${p.host}\u2192${p.container}/${p.proto}`;
+    return scope === 'world' ? `${label} ${bold('[world]')}` : `${label} [${scope}]`;
+  }).join(' ');
+}
+
+async function cmdStacks() {
+  const { stacks, containers } = discoverStacks();
+  if (!containers.length) {
+    line(have('docker') ? WARN() : FAIL(), have('docker') ? 'no containers found' : 'docker is not installed');
+    return 1;
+  }
+  await annotateHealthcheckLies(containers);
+  if (flags.json) { console.log(JSON.stringify({ at: new Date().toISOString(), stacks }, null, 2)); }
+  else {
+    say(`Compose stacks on ${os.hostname()} - ${stacks.length} project(s), ${containers.length} container(s)`);
+    for (const st of stacks) {
+      console.log();
+      line(dim('▸'), `${bold(st.project)}${st.workdir ? dim(`  ${st.workdir}`) : ''}`);
+      for (const c of st.containers) {
+        const t = containerTrouble(c);
+        const mark = t.level === 'ok' ? OK() : t.level === 'warn' ? WARN() : FAIL();
+        line(mark, `${c.service.padEnd(18)} ${(c.health ? `${c.state} (${c.health})` : c.state).padEnd(20)} ${fmtPorts(c)}`);
+        if (t.note) line(dim(' '), dim(`  ${t.note}${t.level === 'fail' ? ` - logs: bigbox stack ${st.project} logs` : ''}`));
+      }
+    }
+    console.log();
+    line(dim('→'), `verbs: bigbox stack <project> status | restart | logs [-f] | update  ·  ports: bigbox ports`);
+  }
+  const worst = containers.map(containerTrouble).reduce((w, t) => t.level === 'fail' ? 'fail' : (t.level === 'warn' && w !== 'fail') ? 'warn' : w, 'ok');
+  return worst === 'fail' ? 2 : worst === 'warn' ? 1 : 0;
+}
+
+async function cmdStack(nameArg, verb = 'status') {
+  if (!nameArg) { line(FAIL(), 'usage: bigbox stack <project> [status|restart|logs|update]'); return 2; }
+  const { stacks } = discoverStacks();
+  const st = stacks.find((x) => x.project.toLowerCase() === nameArg.toLowerCase())
+    || stacks.find((x) => x.containers.some((c) => c.name === nameArg));
+  if (!st) {
+    line(FAIL(), `no stack named '${nameArg}' - known: ${stacks.map((x) => x.project).join(', ') || '(none)'}`);
+    return 2;
+  }
+  const composeUsable = st.composeFile && fs.existsSync(st.composeFile);
+  const compose = (args, timeout = 300000) => run('docker', ['compose', '-f', st.composeFile, ...args], { timeout });
+
+  if (verb === 'status') {
+    await annotateHealthcheckLies(st.containers);
+    say(`${st.project}${st.workdir ? dim(`  ${st.workdir}`) : ''}`);
+    for (const c of st.containers) {
+      const t = containerTrouble(c);
+      line(t.level === 'ok' ? OK() : t.level === 'warn' ? WARN() : FAIL(),
+        `${c.service.padEnd(18)} ${(c.health ? `${c.state} (${c.health})` : c.state).padEnd(20)} restarts ${String(c.restarts ?? 0).padEnd(4)} ${fmtPorts(c)}`);
+      line(dim(' '), dim(`  image ${c.image}${t.note ? `  ·  ${t.note}` : ''}`));
+    }
+    return 0;
+  }
+  if (verb === 'restart') {
+    say(`Restarting ${st.project}`);
+    if (composeUsable) {
+      const r = compose(['restart']);
+      line(r.ok ? OK() : FAIL(), r.ok ? 'compose restart done' : (r.err || r.out).split('\n').slice(-2).join(' '));
+      if (!r.ok) return 2;
+    } else {
+      for (const c of st.containers) {
+        const r = run('docker', ['restart', c.name], { timeout: 120000 });
+        line(r.ok ? OK() : FAIL(), `${c.name} ${r.ok ? 'restarted' : (r.err || r.out)}`);
+      }
+    }
+    await new Promise((res) => setTimeout(res, 3000));
+    const after = discoverStacks().stacks.find((x) => x.project === st.project);
+    for (const c of after?.containers || []) {
+      line(c.state === 'running' ? OK() : WARN(), `${c.service}: ${c.health ? `${c.state} (${c.health})` : c.state}`);
+    }
+    return 0;
+  }
+  if (verb === 'logs') {
+    const n = String(flags.lines);
+    if (composeUsable) {
+      return flags.follow
+        ? runStream('docker', ['compose', '-f', st.composeFile, 'logs', '-f', '--tail', n])
+        : (console.log(compose(['logs', '--tail', n]).out || ''), 0);
+    }
+    for (const c of st.containers) {
+      line(dim('▸'), c.name);
+      const r = run('docker', ['logs', '--tail', n, c.name]);
+      console.log(r.out || r.err || '(no output)');
+    }
+    return 0;
+  }
+  if (verb === 'update') {
+    if (!composeUsable) { line(FAIL(), `no compose file found for ${st.project} (looked for ${st.composeFile || 'a config_files label'})`); return 2; }
+    say(`Updating ${st.project} - pull, then recreate what changed`);
+    const pull = compose(['pull'], 600000);
+    line(pull.ok ? OK() : FAIL(), pull.ok ? 'images pulled' : (pull.err || pull.out).split('\n').slice(-2).join(' '));
+    if (!pull.ok) return 2;
+    const up = compose(['up', '-d'], 600000);
+    line(up.ok ? OK() : FAIL(), up.ok ? 'stack up to date' : (up.err || up.out).split('\n').slice(-2).join(' '));
+    return up.ok ? 0 : 2;
+  }
+  line(FAIL(), `unknown verb '${verb}' - use: status | restart | logs | update`);
+  return 2;
+}
+
+async function cmdPorts() {
+  const { containers } = discoverStacks();
+  if (!containers.length) { line(WARN(), 'no containers found'); return 1; }
+  const rows = [];
+  for (const c of containers) {
+    for (const p of c.ports) rows.push({ c, p, scope: bindScope(p.bind) });
+  }
+  if (flags.json) {
+    console.log(JSON.stringify(rows.map((r) => ({ container: r.c.name, project: r.c.project, bind: r.p.bind, host: r.p.host, containerPort: r.p.container, proto: r.p.proto, scope: r.scope })), null, 2));
+    return 0;
+  }
+  say(`Published ports on ${os.hostname()}`);
+  rows.sort((a, b) => a.p.host - b.p.host);
+  for (const r of rows) {
+    const mark = r.scope === 'world' ? WARN() : OK();
+    line(mark, `${String(r.p.host).padStart(5)}/${r.p.proto}  ${r.scope.padEnd(9)} \u2192 ${String(r.p.container).padEnd(5)} ${bold(r.c.name)}${r.c.project ? dim(`  (${r.c.project})`) : ''}`);
+  }
+  const world = rows.filter((r) => r.scope === 'world');
+  console.log();
+  if (world.length) {
+    line(WARN(), `${world.length} port(s) listen on every interface - and Docker publishes BYPASS ufw, so a host firewall does not cover them`);
+    line(dim('→'), 'bind to 127.0.0.1 in the compose file (ports: "127.0.0.1:8080:80") unless LAN/world access is intended');
+  } else {
+    line(OK(), 'nothing listens on all interfaces');
+  }
+  return world.length ? 1 : 0;
+}
+
 // ------------------------------------------------------------- probes -----
 async function httpProbe(url, timeout = 5000) {
   const t0 = Date.now();
@@ -708,6 +952,26 @@ async function runChecks(cfg, { net = true } = {}) {
       desc: 'start Pi-hole',
       apply: async () => piholeCtl(ph, 'start'),
     });
+  }
+
+  // The fleet: every compose project, not just Keel
+  if (have('docker')) {
+    const { stacks: fleet, containers: fleetC } = discoverStacks();
+    if (fleetC.length) {
+      await annotateHealthcheckLies(fleetC);
+      const troubles = fleetC.map((c) => ({ c, t: containerTrouble(c) }));
+      const failing = troubles.filter((x) => x.t.level === 'fail');
+      const lies = troubles.filter((x) => x.c.lie);
+      add('Stacks', failing.length ? 'fail' : 'ok',
+        `${fleet.length} project(s), ${fleetC.length} container(s)`
+        + (failing.length ? ` - failing: ${failing.map((x) => `${x.c.name} (${x.t.note})`).join(', ')}` : ' - all running'));
+      if (lies.length) {
+        add('Healthcheck lies', 'warn',
+          `${lies.map((x) => x.c.name).join(', ')}: container reports unhealthy but the host port answers - fix the healthcheck, not the app`);
+      }
+      const world = fleetC.flatMap((c) => c.ports.filter((pp) => bindScope(pp.bind) === 'world').map((pp) => `${pp.host}/${pp.proto}`));
+      if (world.length) add('World-exposed ports', 'info', `${[...new Set(world)].join(', ')} listen on every interface (Docker bypasses ufw) - audit: bigbox ports`);
+    }
   }
 
   // Internet ladder (condensed for doctor; `bigbox net` prints the full story)
@@ -1480,6 +1744,22 @@ async function watchOnce(cfg, logFile, { act = true } = {}) {
     }
   }
 
+  if (have('docker')) {
+    const { containers: fleetC } = discoverStacks();
+    await annotateHealthcheckLies(fleetC);
+    const keelName = detectKeelService().name;
+    for (const c of fleetC) {
+      if (c.name === keelName) continue; // the Keel probe above already covers it
+      const t = containerTrouble(c);
+      // A lying healthcheck is a warning for status, not a page - the app works.
+      if (t.level !== 'fail') continue;
+      const lg = run('docker', ['logs', '--tail', '3', c.name], { timeout: 10000 });
+      const tail = (lg.err || lg.out || '').split('\n').filter(Boolean).slice(-2).join(' / ').slice(0, 240);
+      const msg = `${c.name}: ${t.note} (${c.status})${tail ? ` - last log: ${tail}` : ''}`;
+      events[`stack:${c.name}`] = msg; notes.push(msg);
+    }
+  }
+
   const du = diskUsage(cfg.dbPath ? path.dirname(cfg.dbPath) : os.homedir());
   if (du && du.pct >= 95) {
     let msg = `disk ${du.pct}% full (${fmtBytes(du.free)} free)`;
@@ -2022,6 +2302,7 @@ async function cmdGui() {
           backups: ['backup', 'list'],
           'logs-keel': ['logs', 'keel', '-n', url.searchParams.get('lines') || '200'],
           'logs-pihole': ['logs', 'pihole', '-n', url.searchParams.get('lines') || '200'],
+          stacks: ['stacks'],
           doctor: ['doctor'],
         };
         if (!views[which]) return send(res, 400, JSON.stringify({ error: 'unknown view' }));
@@ -2309,6 +2590,7 @@ function guiHtml(label, mode) {
   <button data-tab="network">Network</button>
   <button data-tab="backups">Backups</button>
   <button data-tab="logs">Logs</button>
+  <button data-tab="stacks">Stacks</button>
   <button data-tab="paths">Paths</button>
 </nav>
 <main>
@@ -2357,6 +2639,11 @@ function guiHtml(label, mode) {
     <pre id="logsout">Press “Load”.</pre>
   </div>
 
+  <div id="stacks" hidden>
+    <div class="row"><button class="act" id="reloadstacks">Refresh stacks</button></div>
+    <pre id="stacksout">loading…</pre>
+  </div>
+
   <div id="paths" hidden><pre id="pathsout">loading…</pre></div>
 
   <div class="out" id="outwrap" hidden>
@@ -2375,7 +2662,7 @@ function guiHtml(label, mode) {
   }
 
   function show(tab) {
-    ['overview','network','backups','logs','paths'].forEach(function (t) {
+    ['overview','network','backups','logs','stacks','paths'].forEach(function (t) {
       $(t).hidden = t !== tab;
     });
     document.querySelectorAll('nav button').forEach(function (b) {
@@ -2383,6 +2670,7 @@ function guiHtml(label, mode) {
     });
     if (tab === 'backups' && !loaded.backups) loadText('backups', 'backupsout');
     if (tab === 'paths' && !loaded.paths) loadText('paths', 'pathsout');
+    if (tab === 'stacks' && !loaded.stacks) loadText('stacks', 'stacksout');
   }
   document.querySelectorAll('nav button').forEach(function (b) {
     b.onclick = function () { show(b.dataset.tab); };
@@ -2490,6 +2778,7 @@ function guiHtml(label, mode) {
     });
   };
 
+  $('reloadstacks').onclick = function () { loadText('stacks', 'stacksout'); };
   $('loadlogs').onclick = function () {
     loadText($('logtarget').value, 'logsout', $('loglines').value);
   };
@@ -2523,6 +2812,9 @@ ${bold('Everyday')}
   restart keel|pihole|dns|all also: start, stop
   logs keel|pihole [-f] [-n N]
   net [--fix]                 walk the network stack layer by layer and say what broke
+  stacks                      every compose project on the box, with health verdicts
+  stack <name> restart        also: status, logs [-f], update (pull + up -d)
+  ports                       every published port, and who can actually reach it
 
 ${bold('Data')}
   backup now                  consistent SQLite snapshot + .env copy into the backup folder
@@ -2600,6 +2892,9 @@ ${bold('Examples')}
     case 'watch': rc = await cmdWatch(cfg); break;
     case 'gui': rc = await cmdGui(); break;
     case 'env': rc = await cmdEnv(cfg, words[1], words.slice(2)); break;
+    case 'stacks': rc = await cmdStacks(); break;
+    case 'stack': rc = await cmdStack(words[1], words[2]); break;
+    case 'ports': rc = await cmdPorts(); break;
     case 'notify': rc = await cmdNotify(words[1], words.slice(2)); break;
     case 'digest': rc = await cmdDigest(cfg); break;
     case 'fix': flags.fix = true; rc = await cmdDoctor(cfg); break;
