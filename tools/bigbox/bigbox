@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Launcher for the bigbox CLI (Linux / macOS). Put this directory on your PATH
+# or symlink this file into ~/.local/bin.
+exec node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bigbox.mjs" "$@"
