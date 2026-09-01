@@ -1,0 +1,110 @@
+# Publish the Keel container image to GitHub Container Registry.
+#
+# This is what makes Keel installable from an orchestrator that deploys images
+# rather than source - BoxPilot's app catalog, plain `docker run`, or any
+# compose file. Everything else we ship (release tarballs, the desktop app) is
+# source or a bundle; this is the one artifact a server can pull by name.
+#
+# Deliberately no third-party actions. `docker buildx` is preinstalled on the
+# runners, so the whole job needs only actions/checkout - which is the same
+# posture 1.2.6 took with release artifacts: fewer moving parts in the supply
+# chain beats a more ergonomic workflow.
+name: Image
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (default: the package version)"
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The catalog entry pins an exact version, so the tag has to be the
+      # version in package.json and not whatever the ref happens to be. A tag
+      # push must agree with it: a v1.2.6 tag that builds 1.2.5 would publish an
+      # image whose name lies about what is inside it.
+      - name: Resolve the version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          INPUT="${{ github.event.inputs.tag }}"
+          if [ -n "$INPUT" ]; then
+            VERSION="$INPUT"
+          elif [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            REF_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "$REF_VERSION" != "$VERSION" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match package.json version $VERSION"
+              exit 1
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Lower-case: image references must be, GitHub owners need not be.
+          echo "owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up buildx
+        run: docker buildx create --use --name keel-builder --driver docker-container
+
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # amd64 and arm64: a home server is as likely to be a Raspberry Pi or an
+      # ARM VPS as an Intel box, and BoxPilot runs on both.
+      - name: Build and push
+        env:
+          IMAGE: ghcr.io/${{ steps.version.outputs.owner }}/keel
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg DB_PROVIDER=sqlite \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            --label org.opencontainers.image.version="$VERSION" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.licenses=MIT \
+            --label org.opencontainers.image.description="Self-hosted notebook: pages, databases, mind maps, wikilinks." \
+            --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:latest" \
+            --push \
+            .
+
+      # A published image that does not start is worse than no image: the
+      # catalog would offer it and every install would fail health. Pull the
+      # amd64 manifest back and prove it serves before the job goes green.
+      - name: Smoke-test the published image
+        env:
+          IMAGE: ghcr.io/${{ steps.version.outputs.owner }}/keel
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run -d --name keel-smoke -p 127.0.0.1:3000:3000 \
+            -v "$(mktemp -d)":/data "$IMAGE:$VERSION"
+          for i in $(seq 1 60); do
+            status="$(docker inspect keel-smoke --format '{{.State.Health.Status}}' 2>/dev/null || echo starting)"
+            [ "$status" = "healthy" ] && break
+            [ "$status" = "unhealthy" ] && { docker logs keel-smoke; exit 1; }
+            sleep 5
+          done
+          [ "$(docker inspect keel-smoke --format '{{.State.Health.Status}}')" = "healthy" ] \
+            || { docker logs keel-smoke; echo "::error::image never became healthy"; exit 1; }
+          curl -fsS --max-time 10 http://127.0.0.1:3000/api/health | grep -q '"ok":true'
+          curl -fsS -o /dev/null --max-time 10 http://127.0.0.1:3000/login
+          echo "published $IMAGE:$VERSION and it serves"
+          docker rm -f keel-smoke

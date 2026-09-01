@@ -31,7 +31,8 @@ several devices.
 | **iPhone / iPad source client** | A self-hosted server plus native Apple Pencil drawing | Generate the Xcode project from [docs/IOS.md](docs/IOS.md) |
 | **macOS / Linux server** | A laptop, home server, or VPS | `curl -fsSL https://raw.githubusercontent.com/AES256Afro/Keel/main/install.sh \| bash -s -- --service` |
 | **Windows service** | Keel always running after sign-in | `irm https://raw.githubusercontent.com/AES256Afro/Keel/main/install.ps1 \| iex` |
-| **Docker** | A home server, NAS, or VPS | `docker compose up -d --build` |
+| **Docker** | A home server, NAS, or VPS | `docker run -d -p 3000:3000 -v keel:/data ghcr.io/aes256afro/keel:latest` |
+| **BoxPilot** | An Ubuntu home server managed from a browser | Install **Keel** from the [BoxPilot](https://github.com/AES256Afro/BoxPilot) app catalog |
 | **From source** | Development and review | `npm ci && npm run dev` |
 
 Open `http://localhost:3000`. Registration is open by default and stays open
