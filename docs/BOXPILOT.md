@@ -50,7 +50,7 @@ naming the platforms.
    once, by hand, after the first successful run.
 3. **`linux/amd64` at minimum**, `linux/arm64` as well if Keel should install on
    a Raspberry Pi or similar.
-4. **Tags stay put.** Once `1.2.6` is published it must never be rebuilt to mean
+4. **Tags stay put.** Once `1.2.7` is published it must never be rebuilt to mean
    something else, or a rollback silently restores different code than it says.
 
 ## How BoxPilot will run it
