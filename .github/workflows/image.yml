@@ -94,8 +94,16 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          # A named volume, which is what the README tells people to use and
+          # what an orchestrator gives the container. NOT a bind mount of
+          # mktemp -d: that directory is mode 700 owned by the runner, the
+          # image runs as uid 1000, and the container cannot write to it. Docker
+          # Desktop on a Mac virtualises bind-mount ownership and hides this, so
+          # the first version of this step passed locally and failed on Linux
+          # with "mkdir: cannot create directory '/data': Permission denied".
+          docker volume create keel-smoke-data >/dev/null
           docker run -d --name keel-smoke -p 127.0.0.1:3000:3000 \
-            -v "$(mktemp -d)":/data "$IMAGE:$VERSION"
+            -v keel-smoke-data:/data "$IMAGE:$VERSION"
           for i in $(seq 1 60); do
             status="$(docker inspect keel-smoke --format '{{.State.Health.Status}}' 2>/dev/null || echo starting)"
             [ "$status" = "healthy" ] && break
@@ -108,3 +116,4 @@ jobs:
           curl -fsS -o /dev/null --max-time 10 http://127.0.0.1:3000/login
           echo "published $IMAGE:$VERSION and it serves"
           docker rm -f keel-smoke
+          docker volume rm keel-smoke-data >/dev/null
