@@ -1,5 +1,22 @@
 # What shipped
 
+## 1.2.7 container image and a dependency pin
+
+- Keel now publishes a container image to GitHub Container Registry on each
+  release tag, for linux/amd64 and linux/arm64. Anything that deploys by image
+  reference rather than by building from source, including an orchestrator's
+  app catalog, can install Keel by name. The workflow refuses to publish when a
+  tag disagrees with the package version, and smoke-tests the image it just
+  pushed before the job succeeds.
+- deepmerge-ts is pinned past GHSA-ggr8-5vv4-36mx, a stack-exhaustion advisory
+  that reached the runtime tree through @prisma/config. The package ships and
+  runs inside the container, because the entrypoint applies migrations at boot.
+  Prisma has published no fix, so this is an override; it can be dropped when
+  @prisma/config moves to 8.x itself.
+- docs/BOXPILOT.md describes how a managed home-server platform runs Keel:
+  which image to publish and why, the one data volume, and which settings an
+  installer should ask for.
+
 ## 1.2.6 link-free server artifacts
 
 - Linux and macOS server release archives now contain only regular files and

@@ -123,8 +123,26 @@ if (!/\.nav-links \.button\s*\{[^}]*background:\s*var\(--blue-dark\);[^}]*color:
 if (!/\.feature-card:nth-child\(5\)\s*\{\s*grid-column:\s*1\s*\/\s*-1;\s*\}/.test(stylesSource)) {
   errors.push("styles.css: feature card 05 must span the full grid instead of collapsing to one column");
 }
-if (!/class="button button-small"[^>]*>Get Keel 1\.2\.6<\/a>/.test(homeSource)) {
-  errors.push("index.html: missing the styled Get Keel header action");
+// Derived from package.json, not written out here. A hard-coded version in a
+// checker means every release fails this rule for the one reason that is never
+// a real defect: the site was updated and the checker was not.
+const releaseVersion = JSON.parse(
+  fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf8")
+).version;
+const headerAction = new RegExp(
+  `class="button button-small"[^>]*>Get Keel ${releaseVersion.replace(/\./g, "\\.")}<\\/a>`
+);
+if (!headerAction.test(homeSource)) {
+  errors.push(`index.html: missing the styled Get Keel header action for ${releaseVersion}`);
+}
+// Every page's header advertises the same release, so a partial version bump
+// cannot leave one nav button a release behind.
+for (const file of files) {
+  const source = fs.readFileSync(file, "utf8");
+  const stale = source.match(/>Get Keel (\d+\.\d+\.\d+)</);
+  if (stale && stale[1] !== releaseVersion) {
+    errors.push(`${path.relative(root, file)}: header advertises ${stale[1]}, not ${releaseVersion}`);
+  }
 }
 const leadImageIndex = homeSource.indexOf('src="/keel-notes-sailboat-foundation.png"');
 for (const screenshot of ["keel-editor.png", "keel-board.png", "keel-graph.png"]) {
