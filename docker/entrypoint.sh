@@ -44,7 +44,18 @@ if [ "$PROVIDER" = "sqlite" ]; then
   DB="${DATABASE_URL#file:}"
   DB="${DB%%\?*}"
   while [ "${DB#//}" != "$DB" ]; do DB="${DB#/}"; done
-  mkdir -p "$(dirname "$DB")" "${KEEL_BACKUP_DIR:-/data/backups}"
+  # A bind-mounted host directory arrives with the host's ownership, and this
+  # image runs as uid 1000. `mkdir: Permission denied` is a true statement about
+  # a wrong thing to conclude, so say what actually has to change. A named
+  # volume (the README's `-v keel:/data`) and an orchestrator that chowns the
+  # directory both avoid this; a plain `-v ./data:/data` on Linux does not.
+  if ! mkdir -p "$(dirname "$DB")" "${KEEL_BACKUP_DIR:-/data/backups}" 2>/dev/null; then
+    echo "[keel] cannot write to $(dirname "$DB") as uid $(id -u)." >&2
+    echo "[keel] The data directory is mounted from the host and owned by another user." >&2
+    echo "[keel] Either use a named volume (-v keel:/data), or give the host directory" >&2
+    echo "[keel] to this user: chown -R 1000:1000 <that directory>" >&2
+    exit 1
+  fi
 
   if [ -n "${LITESTREAM_R2_BUCKET:-}" ] && [ -n "${LITESTREAM_R2_ACCESS_KEY_ID:-}" ]; then
     if command -v litestream >/dev/null 2>&1; then
