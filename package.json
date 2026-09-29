@@ -107,7 +107,7 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "electron": "^43.4.0",
+    "electron": "^43.5.0",
     "electron-builder": "^26.15.3",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.2.12",
