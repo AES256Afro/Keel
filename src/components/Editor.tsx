@@ -426,7 +426,9 @@ export default function Editor({
     immediatelyRender: false,
     editable,
     extensions: [
-      StarterKit,
+      // StarterKit 3 bundles Link; we register our own configured copy below,
+      // and two extensions of the same name make tiptap warn and pick one.
+      StarterKit.configure({ link: false }),
       TaskList,
       TaskItem.configure({ nested: true }),
       LinkExtension.configure({ openOnClick: true, autolink: true }),
