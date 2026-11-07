@@ -90,13 +90,13 @@ try {
   );
 
   site = await settings.saveSiteSettings({
-    name: "Chris Projects",
+    name: "Example Projects",
     tagline: "Notes and experiments.",
     notesUrl: "https://notes.example.test/notebook",
   });
   check(
     "the owner can save all public-site fields",
-    site.name.value === "Chris Projects" &&
+    site.name.value === "Example Projects" &&
       site.tagline.value === "Notes and experiments." &&
       site.notesUrl.value === "https://notes.example.test/notebook" &&
       Object.values(site).every((field) => field.source === "managed")
@@ -123,7 +123,7 @@ try {
   delete process.env.KEEL_SITE_TAGLINE;
   check(
     "removing an env override reveals the managed value",
-    (await settings.getSiteSettingsStatus()).name.value === "Chris Projects"
+    (await settings.getSiteSettingsStatus()).name.value === "Example Projects"
   );
   await expectSettingsError(
     "unsafe Notes schemes are rejected",
