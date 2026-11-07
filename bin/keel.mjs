@@ -232,7 +232,7 @@ function serverEnv(port, supervised) {
   // spawns) binds process.env.HOSTNAME verbatim - and several distros export
   // HOSTNAME=<machine name> in every login shell. A machine's name is its
   // identity, not an instruction about which interface to serve on: left to
-  // leak through, "chris-mbp" resolves to the LAN interface, the 127.0.0.1
+  // leak through, "my-mbp" resolves to the LAN interface, the 127.0.0.1
   // health probe below fails, `keel start` reports "did not come up" - while
   // the detached server keeps serving the notebook on an address the user
   // never chose. Commit 6459af2 ("A container's name is not a bind address")
